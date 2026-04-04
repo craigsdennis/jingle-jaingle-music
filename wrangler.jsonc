@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "jingle-jaingle",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-04-03",
+  "vars": {
+    "SITE_URL": "https://jingle-jaingle.craigsdemos.workers.dev",
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAC0V9Q_x8cA9a-0A"
+  },
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "kv_namespaces": [
+    {
+      "binding": "RATE_LIMIT",
+      "id": "49d3961bf9174a098788c9873aff8205"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "MEDIA_BUCKET",
+      "bucket_name": "jingle-jaingle-media"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "jingle-jaingle",
+      "database_id": "25d9dc92-54cd-4201-bef5-5fdf7ad31307",
+      "migrations_dir": "./migrations"
+    }
+  ]
+}
