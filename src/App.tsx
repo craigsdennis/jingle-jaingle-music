@@ -107,6 +107,14 @@ export default function App() {
             <Info size={15} />
             How it works
           </button>
+          <a
+            className="nav-link"
+            href="https://github.com/craigsdennis/jingle-jaingle-music"
+            target="_blank"
+            rel="noreferrer"
+          >
+            👀 Code
+          </a>
         </div>
       </nav>
 
