@@ -44,37 +44,26 @@ type ReplicatePrediction = {
   }
 }
 
-// Each entry is a distinct creative direction. One is picked at random per generation
-// so the output varies in genre, voice, mood, and instrumentation.
-const COMMERCIAL_PROMPTS = [
-  // Upbeat pop jingle — the classic ad spot
-  '[Verse] Upbeat, punchy TV commercial jingle inspired by the product in the image. Bright, hooky melody, enthusiastic male and female vocal duo, hand claps, driving snare, key change into the final chorus. Sung slogan that names the product. [Chorus] Catchy, memorable, positive energy, ends with a triumphant sting.',
-
-  // Lo-fi chill / lifestyle
-  '[Intro] Warm lo-fi hip-hop commercial for the product in the image. Mellow guitar loop, soft vinyl crackle, laid-back female vocal, dreamy reverb, gentle bass. Relaxed lifestyle vibe. [Hook] Simple sung tagline. [Outro] Fades on a muted chord.',
-
-  // Big orchestral / cinematic spot
-  '[Intro] Epic cinematic commercial fanfare for the product in the image. Full orchestra — soaring strings, bold brass stabs, snare rolls. Heroic male baritone voice-over style singing. Builds to a massive final chord. Inspirational and grand.',
-
-  // Retro 80s synth-pop
-  '[Verse] Retro 1980s synth-pop jingle for the product in the image. Pulsing Juno-style synth bass, gated reverb snare, bright arpeggiated leads, catchy falsetto chorus with harmonies. Neon-and-chrome energy. [Chorus] Sing-along hook with call-and-response backing vocals.',
-
-  // Country twang
-  '[Intro] Friendly country-style TV commercial jingle for the product in the image. Acoustic guitar strum, fiddle, warm male tenor vocal, light banjo picking. Folksy, honest, community-feel. [Chorus] Simple singalong hook. [Outro] Pedal steel resolve.',
-
-  // Funky soul / R&B
-  '[Intro] Funky soul commercial for the product in the image. Tight rhythm section, wah-wah guitar, punchy horn section, soulful female lead vocal with gospel-style backing chorus. Irresistible groove. [Hook] Catchy call-and-response lyric about the product. [Outro] Big band finish.',
-
-  // Kids / playful / animated
-  '[Intro] Bright, playful children\'s TV jingle for the product in the image. Ukulele, glockenspiel, bouncy xylophone, enthusiastic children\'s choir, cartoon sound effects. Joyful and energetic. [Chorus] Simple, repetitive sung tagline kids can sing along to.',
-
-  // Luxury / premium / minimalist
-  '[Intro] Elegant, minimal luxury brand spot for the product in the image. Solo piano, soft strings, breathy intimate female vocal. Sophisticated, understated, aspirational. No drums. [Hook] Single sung line — refined and memorable. [Outro] Dissolves on a single piano note.',
-]
+// Lyria 3 reads the product image and decides the right commercial tone itself.
+const COMMERCIAL_PROMPT =
+  'A 30-second commercial jingle for the product shown in the image.\n\n'
+  + 'First, read the product carefully — its category, visual style, colour palette, and the kind of person who would buy it. '
+  + 'Let those cues decide the genre, tempo, instrumentation, and vocal tone. '
+  + 'A children\'s toy should feel like a Saturday-morning ad. '
+  + 'A luxury skincare line should feel like a prestige spot. '
+  + 'A hot sauce should feel bold and fun. '
+  + 'A power tool should feel confident and capable. '
+  + 'Trust the product to set the brief.\n\n'
+  + 'Whatever style you choose, the output must be structured like a real finished commercial:\n'
+  + '- A short punchy intro that hooks the listener immediately\n'
+  + '- A verse that sells the product\'s core benefit or feeling\n'
+  + '- A chorus built around a short, singable tagline derived from what you see in the image\n'
+  + '- A closing button — a crisp 2–4 bar sting that ends the spot cleanly\n\n'
+  + 'The result should sound like something a real brand would actually run — produced, confident, and memorable. '
+  + 'The tagline should be the kind of thing someone is still humming an hour later.'
 
 function pickPrompt(): string {
-  const idx = Math.floor(Math.random() * COMMERCIAL_PROMPTS.length)
-  return COMMERCIAL_PROMPTS[idx]
+  return COMMERCIAL_PROMPT
 }
 
 const JSON_HEADERS = {

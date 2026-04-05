@@ -419,56 +419,75 @@ function HomePage() {
       <main className="content-grid">
         {/* ── Left column: upload ── */}
         <section className="studio-column">
-          <Surface className="panel">
-            {/* Hidden Turnstile widget container */}
-            <div ref={turnstileContainer} className="sr-only" aria-hidden="true" />
+          <div className="studio-sticky">
+            <Surface className="panel">
+              {/* Hidden Turnstile widget container */}
+              <div ref={turnstileContainer} className="sr-only" aria-hidden="true" />
 
-            <label
-              className={`upload-well${isDragOver ? ' is-dragover' : ''}`}
-              htmlFor="product-upload"
-              onDragOver={(e) => { e.preventDefault(); setIsDragOver(true) }}
-              onDragLeave={(e) => { e.preventDefault(); setIsDragOver(false) }}
-              onDrop={(e) => {
-                e.preventDefault(); setIsDragOver(false)
-                const file = e.dataTransfer.files[0]
-                if (file) handleFileChange(file)
-              }}
-            >
-              {previewUrl ? (
-                <img className="upload-preview" src={previewUrl} alt="Product preview" />
-              ) : (
-                <div className="upload-placeholder">
-                  <ImageSquare size={40} weight="duotone" />
-                  <strong>Drop a product photo here</strong>
-                  <span>or click to browse</span>
-                </div>
-              )}
-            </label>
+              <p className="studio-kicker">New jingle</p>
 
-            <input
-              id="product-upload"
-              className="sr-only"
-              type="file"
-              accept="image/*"
-              onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
-            />
-
-            <div className="upload-footer">
-              {selectedFile && (
-                <span className="file-name">{selectedFile.name}</span>
-              )}
-              <Button
-                variant="primary"
-                size="lg"
-                icon={MusicNotes}
-                loading={isSubmitting}
-                disabled={!selectedFile}
-                onClick={() => void handleSubmit()}
+              <label
+                className={`upload-well${isDragOver ? ' is-dragover' : ''}`}
+                htmlFor="product-upload"
+                onDragOver={(e) => { e.preventDefault(); setIsDragOver(true) }}
+                onDragLeave={(e) => { e.preventDefault(); setIsDragOver(false) }}
+                onDrop={(e) => {
+                  e.preventDefault(); setIsDragOver(false)
+                  const file = e.dataTransfer.files[0]
+                  if (file) handleFileChange(file)
+                }}
               >
-                Generate jingle
-              </Button>
+                {previewUrl ? (
+                  <img className="upload-preview" src={previewUrl} alt="Product preview" />
+                ) : (
+                  <div className="upload-placeholder">
+                    <ImageSquare size={40} weight="duotone" />
+                    <strong>Drop a product photo here</strong>
+                    <span>or click to browse — photo only, no text prompt</span>
+                  </div>
+                )}
+              </label>
+
+              <input
+                id="product-upload"
+                className="sr-only"
+                type="file"
+                accept="image/*"
+                onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
+              />
+
+              <div className="upload-footer">
+                {selectedFile && (
+                  <span className="file-name">{selectedFile.name}</span>
+                )}
+                <Button
+                  variant="primary"
+                  size="lg"
+                  icon={MusicNotes}
+                  loading={isSubmitting}
+                  disabled={!selectedFile}
+                  onClick={() => void handleSubmit()}
+                >
+                  Generate jingle
+                </Button>
+              </div>
+            </Surface>
+
+            <div className="studio-hint">
+              <div className="hint-row">
+                <span className="hint-num">01</span>
+                <span>Upload a product photo</span>
+              </div>
+              <div className="hint-row">
+                <span className="hint-num">02</span>
+                <span>Lyria 3 writes a 30-second commercial jingle from the image</span>
+              </div>
+              <div className="hint-row">
+                <span className="hint-num">03</span>
+                <span>Vote, share, and climb the leaderboard</span>
+              </div>
             </div>
-          </Surface>
+          </div>
         </section>
 
         {/* ── Right column: leaderboard ── */}
@@ -504,56 +523,64 @@ function HomePage() {
                   {/* Inline expanded player — only shown on the selected card */}
                   {isSelected && (
                     <div className="card-expanded">
-                      {jingle.status === 'succeeded' && jingle.audioUrl ? (
-                        <audio className="audio-player" controls autoPlay preload="auto" src={jingle.audioUrl} />
-                      ) : jingle.status === 'failed' ? (
-                        <div className="status-panel status-failed">
-                          <SpeakerHigh size={20} />
-                          <p>{jingle.errorMessage ?? 'This take failed. Try a different photo.'}</p>
-                        </div>
-                      ) : (
-                        <div className="status-panel">
-                          <Loader size="sm" />
-                          <p>Composing&hellip;</p>
-                        </div>
-                      )}
+                      <div className="card-expanded-inner">
+                        <img className="card-expanded-img" src={jingle.imageUrl} alt="Product" />
 
-                      <div className="card-expanded-actions">
-                        <Button
-                          variant={jingle.hasVoted ? 'outline' : 'secondary'}
-                          size="sm"
-                          icon={HandsClapping}
-                          disabled={jingle.status !== 'succeeded'}
-                          onClick={() => void handleVote(jingle.id)}
-                        >
-                          {jingle.votes} {jingle.hasVoted ? '· voted' : ''}
-                        </Button>
-                        <Button variant="ghost" size="sm" icon={ShareNetwork} onClick={() => void handleShare(jingle)}>
-                          Share
-                        </Button>
-                        {jingle.status === 'succeeded' && (
-                          <Button variant="ghost" size="sm" icon={XLogo} onClick={() => handleShareX(jingle)}>
-                            Post
-                          </Button>
-                        )}
-                        {deleteTokens[jingle.id] && (
-                          <Button
-                            variant="ghost"
+                        <div className="card-expanded-right">
+                          {jingle.status === 'succeeded' && jingle.audioUrl ? (
+                            <audio className="audio-player" controls autoPlay preload="auto" src={jingle.audioUrl} />
+                          ) : jingle.status === 'failed' ? (
+                            <div className="status-panel status-failed">
+                              <SpeakerHigh size={20} />
+                              <p>{jingle.errorMessage ?? 'This take failed. Try a different photo.'}</p>
+                            </div>
+                          ) : (
+                            <div className="status-panel">
+                              <Loader size="sm" />
+                              <p>Composing&hellip;</p>
+                            </div>
+                          )}
+
+                          <div className="card-expanded-actions">
+                            <Button
+                              variant={jingle.hasVoted ? 'outline' : 'secondary'}
+                              size="sm"
+                              icon={HandsClapping}
+                              disabled={jingle.status !== 'succeeded'}
+                              onClick={() => void handleVote(jingle.id)}
+                            >
+                              {jingle.votes} {jingle.hasVoted ? '· voted' : ''}
+                            </Button>
+                            <div className="card-expanded-secondary">
+                              <Button variant="ghost" size="sm" icon={ShareNetwork} onClick={() => void handleShare(jingle)}>
+                                Share
+                              </Button>
+                              {jingle.status === 'succeeded' && (
+                                <Button variant="ghost" size="sm" icon={XLogo} onClick={() => handleShareX(jingle)}>
+                                  Post
+                                </Button>
+                              )}
+                              {deleteTokens[jingle.id] && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  icon={Trash}
+                                  className="delete-btn"
+                                  onClick={() => void handleDelete(jingle)}
+                                >
+                                  Delete
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+
+                          <ClipboardText
+                            text={jingle.shareUrl}
                             size="sm"
-                            icon={Trash}
-                            className="delete-btn"
-                            onClick={() => void handleDelete(jingle)}
-                          >
-                            Delete
-                          </Button>
-                        )}
+                            tooltip={{ text: 'Copy link', copiedText: 'Copied' }}
+                          />
+                        </div>
                       </div>
-
-                      <ClipboardText
-                        text={jingle.shareUrl}
-                        size="sm"
-                        tooltip={{ text: 'Copy link', copiedText: 'Copied' }}
-                      />
                     </div>
                   )}
 
