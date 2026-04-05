@@ -12,7 +12,6 @@ import {
   XLogo,
 } from '@phosphor-icons/react'
 import { AboutPage } from './About'
-import { AdminPage } from './Admin'
 import './App.css'
 
 type JingleStatus = 'queued' | 'processing' | 'succeeded' | 'failed'
@@ -23,8 +22,6 @@ type Jingle = {
   votes: number
   imageUrl: string
   audioUrl: string | null
-  videoUrl: string | null
-  videoStatus: string | null
   shareUrl: string
   hasVoted: boolean
   errorMessage: string | null
@@ -75,24 +72,18 @@ function readApiError(payload: unknown, fallback: string) {
 }
 
 export default function App() {
-  const [page, setPage] = useState<'home' | 'about' | 'admin'>(() => {
-    if (window.location.hash === '#about') return 'about'
-    if (window.location.hash === '#admin') return 'admin'
-    return 'home'
-  })
+  const [page, setPage] = useState<'home' | 'about'>(() =>
+    window.location.hash === '#about' ? 'about' : 'home'
+  )
 
   useEffect(() => {
-    const onHash = () => {
-      if (window.location.hash === '#about') setPage('about')
-      else if (window.location.hash === '#admin') setPage('admin')
-      else setPage('home')
-    }
+    const onHash = () => setPage(window.location.hash === '#about' ? 'about' : 'home')
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
 
-  function nav(to: 'home' | 'about' | 'admin') {
-    window.location.hash = to === 'home' ? '' : `#${to}`
+  function nav(to: 'home' | 'about') {
+    window.location.hash = to === 'about' ? '#about' : ''
     setPage(to)
   }
 
@@ -129,8 +120,6 @@ export default function App() {
 
       {page === 'about' ? (
         <AboutPage onBack={() => nav('home')} />
-      ) : page === 'admin' ? (
-        <AdminPage onBack={() => nav('home')} />
       ) : (
         <HomePage />
       )}

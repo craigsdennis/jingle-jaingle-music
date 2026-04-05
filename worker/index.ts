@@ -10,7 +10,6 @@ type Env = {
   SITE_URL: string
   TURNSTILE_SITE_KEY: string
   TURNSTILE_SECRET_KEY: string
-  ADMIN_TOKEN: string
 }
 
 const PAGE_SIZE = 12
@@ -33,14 +32,7 @@ type DbJingle = {
   replicate_output_url: string | null
   replicate_web_url: string | null
   delete_token: string | null
-  video_key: string | null
-  video_content_type: string | null
-  video_status: string | null
-  video_error: string | null
-  video_replicate_id: string | null
 }
-
-const WAN_MODEL_VERSION = '828436fb90dcc167bc1566ba13c294d98c68fdbfbdcdd7a095149c98c7a9e668'
 
 type ReplicatePrediction = {
   id?: string
@@ -125,19 +117,8 @@ const worker: ExportedHandler<Env> = {
         return handleReplicateWebhook(request, env)
       }
 
-      if (request.method === 'POST' && url.pathname === '/api/replicate/video-webhook') {
-        return handleVideoWebhook(request, env)
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/admin/video') {
-        return handleAdminGenerateVideo(request, env)
-      }
-
-      if (request.method === 'GET' && url.pathname === '/api/admin/status') {
-        return handleAdminStatus(request, env)
-      }
-
-      const mediaRoute = url.pathname.match(/^\/media\/jingles\/([0-9a-f-]+)\/(image|audio|video)$/)
+      // Matches with or without extension — extension ignored, kind drives the lookup
+      const mediaRoute = url.pathname.match(/^\/media\/jingles\/([0-9a-f-]+)\/(image|audio)(?:\.\w+)?$/)
       if (request.method === 'GET' && mediaRoute) {
         return getMediaAsset(env, mediaRoute[1], mediaRoute[2])
       }
@@ -531,9 +512,7 @@ async function getMediaAsset(env: Env, jingleId: string, kind: string) {
     return new Response('Not found', { status: 404 })
   }
 
-  const key = kind === 'image' ? record.image_key
-    : kind === 'audio' ? record.audio_key
-    : record.video_key
+  const key = kind === 'image' ? record.image_key : record.audio_key
   if (!key) {
     return new Response('Not found', { status: 404 })
   }
@@ -567,12 +546,7 @@ async function findJingle(env: Env, id: string) {
       replicate_prediction_id,
       replicate_output_url,
       replicate_web_url,
-      delete_token,
-      video_key,
-      video_content_type,
-      video_status,
-      video_error,
-      video_replicate_id
+      delete_token
     FROM jingles
     WHERE id = ?1`,
   )
@@ -657,206 +631,6 @@ async function getSharePage(request: Request, env: Env, id: string) {
   })
 }
 
-// ── Admin helpers ─────────────────────────────────────────────────────────────
-
-function requireAdminToken(request: Request, env: Env) {
-  const auth = request.headers.get('authorization') ?? ''
-  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : ''
-  if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
-    return json({ error: 'Unauthorized.' }, 401)
-  }
-  return null
-}
-
-async function handleAdminStatus(request: Request, env: Env) {
-  const denied = requireAdminToken(request, env)
-  if (denied) return denied
-
-  const origin = new URL(request.url).origin
-
-  // Top succeeded jingle by votes
-  const top = await env.DB.prepare(
-    `SELECT
-      id, status, votes, image_key, audio_key,
-      video_key, video_status, video_error, video_replicate_id,
-      created_at, updated_at, error_message,
-      replicate_prediction_id, replicate_output_url, replicate_web_url,
-      image_content_type, audio_content_type, video_content_type, delete_token
-    FROM jingles
-    WHERE status = 'succeeded'
-    ORDER BY votes DESC, created_at DESC
-    LIMIT 1`,
-  ).first<DbJingle>()
-
-  return json({
-    topJingle: top ? serializeJingle(top, origin, new Set(), env.SITE_URL) : null,
-    topJingleRaw: top ? {
-      id: top.id,
-      votes: top.votes,
-      imageKey: top.image_key,
-      audioKey: top.audio_key,
-      videoKey: top.video_key,
-      videoStatus: top.video_status,
-      videoError: top.video_error,
-    } : null,
-  })
-}
-
-async function handleAdminGenerateVideo(request: Request, env: Env) {
-  const denied = requireAdminToken(request, env)
-  if (denied) return denied
-
-  ensureReplicateConfig(env)
-
-  const origin = new URL(request.url).origin
-
-  // Accept optional explicit jingle id in body, otherwise use top-voted
-  let jingleId: string | null = null
-  try {
-    const body = (await request.json()) as { jingleId?: string }
-    jingleId = body.jingleId ?? null
-  } catch { /* no body is fine */ }
-
-  const record = jingleId
-    ? await findJingle(env, jingleId)
-    : await env.DB.prepare(
-        `SELECT
-          id, status, votes, image_key, audio_key,
-          video_key, video_status, video_error, video_replicate_id,
-          created_at, updated_at, error_message,
-          replicate_prediction_id, replicate_output_url, replicate_web_url,
-          image_content_type, audio_content_type, video_content_type, delete_token
-        FROM jingles
-        WHERE status = 'succeeded' AND audio_key IS NOT NULL
-        ORDER BY votes DESC, created_at DESC
-        LIMIT 1`,
-      ).first<DbJingle>()
-
-  if (!record) {
-    return json({ error: 'No eligible jingle found.' }, 404)
-  }
-
-  if (record.status !== 'succeeded' || !record.audio_key) {
-    return json({ error: 'Jingle is not yet succeeded or has no audio.' }, 409)
-  }
-
-  // Already has a good video — skip unless forced
-  if (record.video_status === 'succeeded') {
-    return json({ error: 'This jingle already has a video. Pass a different jingle id to regenerate.', jingleId: record.id }, 409)
-  }
-
-  const audioUrl = `${origin}/media/jingles/${record.id}/audio`
-  const imageUrl = `${origin}/media/jingles/${record.id}/image`
-  const webhookUrl = `${origin}/api/replicate/video-webhook?jingle=${encodeURIComponent(record.id)}&token=${encodeURIComponent(env.REPLICATE_WEBHOOK_TOKEN)}`
-
-  const replicateRes = await fetch('https://api.replicate.com/v1/predictions', {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${env.REPLICATE_API_TOKEN}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      version: WAN_MODEL_VERSION,
-      input: {
-        first_frame: imageUrl,
-        audio: audioUrl,
-        prompt: 'A dynamic product commercial advertisement. The product animates with energy and motion in sync with the music. Professional studio lighting. Cinematic camera movement.',
-        duration: 5,
-        resolution: '720p',
-        enable_prompt_expansion: false,
-      },
-      webhook: webhookUrl,
-      webhook_events_filter: ['completed'],
-    }),
-  })
-
-  const prediction = (await replicateRes.json()) as ReplicatePrediction & { detail?: string; id?: string }
-
-  if (!replicateRes.ok) {
-    return json({ error: prediction.detail || prediction.error || 'Replicate rejected the video request.' }, 502)
-  }
-
-  await env.DB.prepare(
-    `UPDATE jingles
-     SET video_status = 'queued',
-         video_replicate_id = ?2,
-         video_error = NULL,
-         updated_at = ?3
-     WHERE id = ?1`,
-  ).bind(record.id, prediction.id ?? null, new Date().toISOString()).run()
-
-  return json({ ok: true, jingleId: record.id, predictionId: prediction.id })
-}
-
-async function handleVideoWebhook(request: Request, env: Env) {
-  ensureReplicateConfig(env)
-
-  const url = new URL(request.url)
-  if (url.searchParams.get('token') !== env.REPLICATE_WEBHOOK_TOKEN) {
-    return json({ error: 'Invalid webhook token.' }, 401)
-  }
-
-  const jingleId = url.searchParams.get('jingle')
-  if (!jingleId) return json({ error: 'Missing jingle id.' }, 400)
-
-  const prediction = (await request.json()) as ReplicatePrediction
-
-  if (prediction.status === 'failed' || prediction.status === 'canceled') {
-    await env.DB.prepare(
-      `UPDATE jingles
-       SET video_status = 'failed',
-           video_error = ?2,
-           updated_at = ?3
-       WHERE id = ?1`,
-    ).bind(jingleId, prediction.error || 'Video generation failed.', new Date().toISOString()).run()
-    return json({ ok: true })
-  }
-
-  if (prediction.status !== 'succeeded') {
-    return json({ ok: true })
-  }
-
-  const outputUrl = normalizeOutputUrl(prediction.output)
-  if (!outputUrl) {
-    await env.DB.prepare(
-      `UPDATE jingles SET video_status = 'failed', video_error = ?2, updated_at = ?3 WHERE id = ?1`,
-    ).bind(jingleId, 'Wan returned no video output URL.', new Date().toISOString()).run()
-    return json({ ok: true })
-  }
-
-  const videoRes = await fetch(outputUrl, {
-    headers: { authorization: `Bearer ${env.REPLICATE_API_TOKEN}` },
-  })
-
-  if (!videoRes.ok) {
-    await env.DB.prepare(
-      `UPDATE jingles SET video_status = 'failed', video_error = ?2, updated_at = ?3 WHERE id = ?1`,
-    ).bind(jingleId, `Could not fetch video (${videoRes.status}).`, new Date().toISOString()).run()
-    return json({ ok: true })
-  }
-
-  const videoKey = `video/${jingleId}.mp4`
-  const videoType = videoRes.headers.get('content-type') || 'video/mp4'
-
-  await env.MEDIA_BUCKET.put(videoKey, await videoRes.arrayBuffer(), {
-    httpMetadata: {
-      contentType: videoType,
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-  })
-
-  await env.DB.prepare(
-    `UPDATE jingles
-     SET video_status = 'succeeded',
-         video_key = ?2,
-         video_content_type = ?3,
-         video_error = NULL,
-         updated_at = ?4
-     WHERE id = ?1`,
-  ).bind(jingleId, videoKey, videoType, new Date().toISOString()).run()
-
-  return json({ ok: true })
-}
 
 async function verifyTurnstile(token: string, secret: string, ip?: string) {
   const body = new FormData()
@@ -892,8 +666,6 @@ function serializeJingle(record: DbJingle, origin: string, votedIds: Set<string>
     votes: record.votes,
     imageUrl: `${origin}/media/jingles/${record.id}/image`,
     audioUrl: record.audio_key ? `${origin}/media/jingles/${record.id}/audio` : null,
-    videoUrl: record.video_key ? `${origin}/media/jingles/${record.id}/video` : null,
-    videoStatus: record.video_status ?? null,
     shareUrl: `${base}/share/${record.id}`,
     hasVoted: votedIds.has(record.id),
     errorMessage: record.error_message,
