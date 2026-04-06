@@ -260,13 +260,27 @@ async function createJingle(request: Request, env: Env) {
     return json({ error: 'Keep uploads under 10MB.' }, 400)
   }
 
+  // ── NSFW check ──────────────────────────────────────────────────────────────
+  // Convert image to base64 data URI and run it through Llama Guard 4 before
+  // writing anything to R2 or D1. Uses Prefer: wait for a synchronous result.
+  const imageBytes = await image.arrayBuffer()
+  const base64 = btoa(String.fromCharCode(...new Uint8Array(imageBytes)))
+  const dataUri = `data:${image.type};base64,${base64}`
+
+  const nsfwResult = await checkImageNsfw(dataUri, env.REPLICATE_API_TOKEN)
+  if (nsfwResult === 'unsafe') {
+    return json({ error: 'This image was flagged as inappropriate and cannot be used.' }, 422)
+  }
+  // If the check itself failed (model error / timeout) we allow the upload
+  // through rather than blocking legitimate users — fail open here.
+
   const id = crypto.randomUUID()
   const deleteToken = crypto.randomUUID()
   const now = new Date().toISOString()
   const extension = extensionFor(image.type)
   const imageKey = `images/${id}${extension}`
 
-  await env.MEDIA_BUCKET.put(imageKey, await image.arrayBuffer(), {
+  await env.MEDIA_BUCKET.put(imageKey, imageBytes, {
     httpMetadata: {
       contentType: image.type,
       cacheControl: 'public, max-age=31536000, immutable',
@@ -695,6 +709,41 @@ async function handleVideoUpload(request: Request, env: Env, jingleId: string) {
     ok: true,
     videoUrl: `${origin}/media/jingles/${jingleId}/video`,
   }, 201)
+}
+
+async function checkImageNsfw(dataUri: string, replicateToken: string): Promise<'safe' | 'unsafe' | 'unknown'> {
+  try {
+    const res = await fetch('https://api.replicate.com/v1/predictions', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${replicateToken}`,
+        'content-type': 'application/json',
+        'prefer': 'wait=30', // block up to 30s for a synchronous result
+      },
+      body: JSON.stringify({
+        version: 'b04f49b037b3a1476128f1c7434cf64385ccec6dc7d7d344647df0fc2103892c',
+        input: {
+          prompt: '<image>Does this image contain nudity, sexual content, graphic violence, or any other content that would be inappropriate for a public product commercial? Reply with only the word "safe" or "unsafe".',
+          image_input: [dataUri],
+          max_completion_tokens: 16,
+          temperature: 0,
+        },
+      }),
+    })
+
+    if (!res.ok) return 'unknown'
+
+    const prediction = (await res.json()) as { status?: string; output?: string[] }
+
+    if (prediction.status !== 'succeeded' || !prediction.output) return 'unknown'
+
+    const text = prediction.output.join('').trim().toLowerCase()
+    if (text.startsWith('unsafe')) return 'unsafe'
+    if (text.startsWith('safe')) return 'safe'
+    return 'unknown'
+  } catch {
+    return 'unknown'
+  }
 }
 
 async function verifyTurnstile(token: string, secret: string, ip?: string) {
