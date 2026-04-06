@@ -264,7 +264,15 @@ async function createJingle(request: Request, env: Env) {
   // Convert image to base64 data URI and run it through Llama Guard 4 before
   // writing anything to R2 or D1. Uses Prefer: wait for a synchronous result.
   const imageBytes = await image.arrayBuffer()
-  const base64 = btoa(String.fromCharCode(...new Uint8Array(imageBytes)))
+  // btoa(String.fromCharCode(...bytes)) crashes on large images because spread
+  // exhausts the call stack. Chunk it instead.
+  const bytes = new Uint8Array(imageBytes)
+  let binary = ''
+  const CHUNK = 8192
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+  }
+  const base64 = btoa(binary)
   const dataUri = `data:${image.type};base64,${base64}`
 
   const nsfwResult = await checkImageNsfw(dataUri, env.REPLICATE_API_TOKEN)
