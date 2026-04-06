@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Badge, Button, ClipboardText, Loader, Surface } from '@cloudflare/kumo'
 import {
+  FilmStrip,
   HandsClapping,
   ImageSquare,
   Info,
@@ -12,6 +13,7 @@ import {
   XLogo,
 } from '@phosphor-icons/react'
 import { AboutPage } from './About'
+import { VideoComposerModal } from './VideoComposer'
 import './App.css'
 
 type JingleStatus = 'queued' | 'processing' | 'succeeded' | 'failed'
@@ -22,6 +24,8 @@ type Jingle = {
   votes: number
   imageUrl: string
   audioUrl: string | null
+  videoUrl: string | null
+  videoStatus: string | null
   shareUrl: string
   hasVoted: boolean
   errorMessage: string | null
@@ -141,6 +145,7 @@ function HomePage() {
   )
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
+  const [composingJingle, setComposingJingle] = useState<Jingle | null>(null)
   // Map of jingle id -> delete token, persisted in localStorage
   const [deleteTokens, setDeleteTokens] = useState<Record<string, string>>(() => {
     try {
@@ -552,6 +557,16 @@ function HomePage() {
                               {jingle.votes} {jingle.hasVoted ? '· voted' : ''}
                             </Button>
                             <div className="card-expanded-secondary">
+                              {jingle.status === 'succeeded' && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  icon={FilmStrip}
+                                  onClick={() => setComposingJingle(jingle)}
+                                >
+                                  Create video
+                                </Button>
+                              )}
                               <Button variant="ghost" size="sm" icon={ShareNetwork} onClick={() => void handleShare(jingle)}>
                                 Share
                               </Button>
@@ -646,6 +661,22 @@ function HomePage() {
           )}
         </section>
       </main>
+
+      {composingJingle && (
+        <VideoComposerModal
+          jingle={composingJingle}
+          onClose={() => setComposingJingle(null)}
+          onUploaded={(videoUrl) => {
+            setJingles((cur) =>
+              cur.map((j) =>
+                j.id === composingJingle.id
+                  ? { ...j, videoUrl, videoStatus: 'succeeded' }
+                  : j
+              )
+            )
+          }}
+        />
+      )}
     </>
   )
 }
