@@ -13,10 +13,15 @@ const END_CARD_DURATION_MS = 2500 // branded end card at the close
 const FRAME_RATE = 30
 const QR_URL = 'https://shrty.dev/jingle-vid'
 
-// Citrus yellow from the brand palette
+// Brand palette
 const CITRUS = '#d8ff2e'
 const INK = '#0e0d14'
 const INK_SOFT = 'rgba(14,13,20,0.55)'
+// Cloudflare orange — exact value from workers.cloudflare.com
+const CF_ORANGE = 'rgb(255, 72, 1)'
+const CF_ORANGE_DIM = 'rgba(255, 72, 1, 0.15)'
+// Workers light-mode background — exact value from workers.cloudflare.com
+const WORKERS_BG = 'rgb(255, 253, 251)'
 
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -88,10 +93,10 @@ function drawWaveform(
     const x = startX + i * (barW + barGap)
     const y = baseY - barH
 
-    // Gradient bar: citrus at top fading to transparent
+    // Gradient bar: Cloudflare orange at top fading to a dim glow at base
     const grad = ctx.createLinearGradient(x, y, x, baseY)
-    grad.addColorStop(0, CITRUS)
-    grad.addColorStop(1, 'rgba(216,255,46,0.1)')
+    grad.addColorStop(0, CF_ORANGE)
+    grad.addColorStop(1, CF_ORANGE_DIM)
 
     ctx.fillStyle = grad
     ctx.beginPath()
@@ -123,7 +128,7 @@ function drawMainFrame(
 
   // Soft shadow behind product
   ctx.save()
-  ctx.shadowColor = 'rgba(216,255,46,0.12)'
+  ctx.shadowColor = 'rgba(255,72,1,0.18)'
   ctx.shadowBlur = 60
   ctx.drawImage(productImg, ix, iy, iw, ih)
   ctx.restore()
@@ -149,19 +154,27 @@ function drawEndCard(
   h: number,
   progress: number, // 0–1, for fade-in animation
 ) {
-  // Citrus background
-  ctx.fillStyle = CITRUS
+  // Workers light-mode background — warm near-white
+  ctx.fillStyle = WORKERS_BG
+  ctx.fillRect(0, 0, w, h)
+
+  // Subtle orange radial glow top-centre — matches the Workers hero feel
+  const glow = ctx.createRadialGradient(w / 2, 0, 0, w / 2, 0, w * 0.7)
+  glow.addColorStop(0, 'rgba(255,72,1,0.18)')
+  glow.addColorStop(0.5, 'rgba(255,72,1,0.06)')
+  glow.addColorStop(1, 'rgba(255,72,1,0)')
+  ctx.fillStyle = glow
   ctx.fillRect(0, 0, w, h)
 
   ctx.globalAlpha = progress
 
-  const fontSize = Math.floor(w * 0.095)
+  // ── Brand name ──────────────────────────────────────────
+  const fontSize = Math.floor(w * 0.088)
   ctx.font = `bold ${fontSize}px "Bungee", sans-serif`
 
-  // Measure brand name for centring
   const bigParts = [
     { text: 'jingle j', color: INK },
-    { text: 'AI', color: '#ffffff' },
+    { text: 'AI', color: CF_ORANGE },
     { text: 'ngle', color: INK },
   ]
 
@@ -173,15 +186,17 @@ function drawEndCard(
     totalW += mw
   }
 
-  // Layout: brand name sits in upper third, QR below
-  const qrSize = Math.floor(w * 0.28)
-  const contentH = fontSize + 32 + qrSize + 32 // brand + gap + qr + gap
-  const startY = (h - contentH) / 2
+  // Layout: brand | gap | "make your own" | gap | QR | gap | tagline
+  const ctaSize = Math.floor(w * 0.026)
+  const qrSize = Math.floor(w * 0.26)
+  const tagSize = Math.floor(w * 0.022)
+  const pad = 20
+  const totalContentH = fontSize + ctaSize * 2 + qrSize + pad * 2 + tagSize * 2
+  const startY = (h - totalContentH) / 2
 
   // Brand name
-  let curX = w / 2 - totalW / 2
   const brandY = startY + fontSize
-
+  let curX = w / 2 - totalW / 2
   ctx.textAlign = 'left'
   ctx.textBaseline = 'alphabetic'
   for (let i = 0; i < bigParts.length; i++) {
@@ -190,26 +205,43 @@ function drawEndCard(
     curX += widths[i]
   }
 
-  // "Make your own" label above QR
-  const ctaSize = Math.floor(w * 0.028)
+  // "Make your own" label
   ctx.font = `600 ${ctaSize}px "IBM Plex Sans", sans-serif`
   ctx.textAlign = 'center'
   ctx.fillStyle = INK_SOFT
-  const ctaY = brandY + fontSize * 0.22 + ctaSize * 1.4
+  const ctaY = brandY + ctaSize * 1.6
   ctx.fillText('Make your own', w / 2, ctaY)
 
-  // QR code image — white padded square with rounded corners
+  // QR code — light background card with orange shadow
   const qrX = (w - qrSize) / 2
-  const qrY = ctaY + ctaSize * 0.6
-  const pad = 16
-  const r = 18
+  const qrY = ctaY + ctaSize * 0.8
+  const r = 20
 
+  // Card shadow
+  ctx.save()
+  ctx.shadowColor = 'rgba(255,72,1,0.18)'
+  ctx.shadowBlur = 32
   ctx.fillStyle = '#ffffff'
   ctx.beginPath()
   ctx.roundRect(qrX - pad, qrY - pad, qrSize + pad * 2, qrSize + pad * 2, r)
   ctx.fill()
+  ctx.restore()
+
+  // Orange border ring
+  ctx.strokeStyle = CF_ORANGE
+  ctx.lineWidth = 3
+  ctx.beginPath()
+  ctx.roundRect(qrX - pad, qrY - pad, qrSize + pad * 2, qrSize + pad * 2, r)
+  ctx.stroke()
 
   ctx.drawImage(qrImg, qrX, qrY, qrSize, qrSize)
+
+  // ── Tagline below QR ────────────────────────────────────
+  const tagY = qrY + qrSize + pad * 2 + tagSize
+  ctx.font = `500 ${tagSize}px "IBM Plex Sans", sans-serif`
+  ctx.textAlign = 'center'
+  ctx.fillStyle = INK_SOFT
+  ctx.fillText('Built with 🧡 on Cloudflare & Replicate', w / 2, tagY)
 
   ctx.globalAlpha = 1
   ctx.textAlign = 'left'
@@ -235,7 +267,7 @@ export function useVideoComposer() {
         QRCode.toDataURL(QR_URL, {
           width: 512,
           margin: 1,
-          color: { dark: INK, light: '#ffffff' },
+          color: { dark: '#0e0d14', light: '#ffffff' },
           errorCorrectionLevel: 'M',
         }),
         fetch(audioUrl),
