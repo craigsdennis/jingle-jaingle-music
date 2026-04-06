@@ -64,9 +64,10 @@ npm run deploy                    # tsc + vite build + wrangler deploy
 - **Always add new DB columns via a migration** — create a new `.sql` file in `migrations/` and run `wrangler d1 migrations apply` both locally and remotely. Never `ALTER TABLE` directly in the Worker.
 - **Always add `delete_token` to `SELECT` queries** — `findJingle` selects all columns explicitly; keep it in sync with the schema.
 - **Rate limiter and Turnstile checks come first** in `createJingle` — before any R2 write or Replicate call. Do not reorder them.
+- **NSFW check runs before R2 write** — `checkImageNsfw()` converts the image to a base64 data URI and calls `meta/llama-guard-4-12b` synchronously (`Prefer: wait=30`) before writing anything to R2 or D1. Unsafe images return a 422. The check fails open (`unknown`) so model errors don't block legitimate users.
 - **`SITE_URL` is the canonical base for share links** — always use `serializeJingle(record, origin, votedIds, env.SITE_URL)`. Never hardcode the domain.
 - **Webhook token is validated before any DB access** in `handleReplicateWebhook`. Keep it that way.
-- **R2 object keys** follow the pattern `images/<uuid>.<ext>` and `audio/<uuid>.mp3`. Do not change the key scheme without updating `getMediaAsset`.
+- **R2 object keys** follow the pattern `images/<uuid>.<ext>`, `audio/<uuid>.mp3`, and `video/<uuid>.webm`. Do not change the key scheme without updating `getMediaAsset`.
 
 ### Frontend
 
