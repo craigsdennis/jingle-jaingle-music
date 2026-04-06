@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Badge, Button, ClipboardText, Loader, Surface } from '@cloudflare/kumo'
+import { Badge, Button, Loader, Surface } from '@cloudflare/kumo'
 import {
   FilmStrip,
   HandsClapping,
   ImageSquare,
   Info,
+  Link,
   MusicNotes,
   ShareNetwork,
   SpeakerHigh,
@@ -73,6 +74,29 @@ function readApiError(payload: unknown, fallback: string) {
     if (typeof c === 'string' && c.trim()) return c
   }
   return fallback
+}
+
+function CopyLinkRow({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false)
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch { /* ignore */ }
+  }
+
+  // Show only the path portion to keep it short
+  const display = url.replace(/^https?:\/\/[^/]+/, '')
+
+  return (
+    <button className="copy-link-row" onClick={() => void copy()}>
+      <Link size={13} />
+      <span className="copy-link-url">{display}</span>
+      <span className="copy-link-badge">{copied ? 'Copied!' : 'Copy'}</span>
+    </button>
+  )
 }
 
 export default function App() {
@@ -590,11 +614,7 @@ function HomePage() {
                             </div>
                           </div>
 
-                          <ClipboardText
-                            text={jingle.shareUrl}
-                            size="sm"
-                            tooltip={{ text: 'Copy link', copiedText: 'Copied' }}
-                          />
+                          <CopyLinkRow url={jingle.shareUrl} />
                         </div>
                       </div>
                     </div>
