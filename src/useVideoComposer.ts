@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
+import QRCode from 'qrcode'
 
 export type VideoComposerState =
   | { phase: 'idle' }
@@ -10,7 +11,7 @@ export type VideoComposerState =
 const CANVAS_SIZE = 1080          // square — best for IG Reels / X
 const END_CARD_DURATION_MS = 2500 // branded end card at the close
 const FRAME_RATE = 30
-const SITE_URL = 'jingle-jaingle.craigsdemos.workers.dev'
+const QR_URL = 'https://shrty.dev/jingle-vid'
 
 // Citrus yellow from the brand palette
 const CITRUS = '#d8ff2e'
@@ -143,6 +144,7 @@ function drawMainFrame(
 
 function drawEndCard(
   ctx: CanvasRenderingContext2D,
+  qrImg: HTMLImageElement,
   w: number,
   h: number,
   progress: number, // 0–1, for fade-in animation
@@ -153,19 +155,15 @@ function drawEndCard(
 
   ctx.globalAlpha = progress
 
-  // Brand name — large Bungee centred
-  ctx.font = `bold ${Math.floor(w * 0.095)}px "Bungee", sans-serif`
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
+  const fontSize = Math.floor(w * 0.095)
+  ctx.font = `bold ${fontSize}px "Bungee", sans-serif`
 
-  // "jingle j" + "AI" + "ngle" — manual multi-colour
+  // Measure brand name for centring
   const bigParts = [
     { text: 'jingle j', color: INK },
     { text: 'AI', color: '#ffffff' },
     { text: 'ngle', color: INK },
   ]
-  const fontSize = Math.floor(w * 0.095)
-  ctx.font = `bold ${fontSize}px "Bungee", sans-serif`
 
   let totalW = 0
   const widths: number[] = []
@@ -175,8 +173,14 @@ function drawEndCard(
     totalW += mw
   }
 
+  // Layout: brand name sits in upper third, QR below
+  const qrSize = Math.floor(w * 0.28)
+  const contentH = fontSize + 32 + qrSize + 32 // brand + gap + qr + gap
+  const startY = (h - contentH) / 2
+
+  // Brand name
   let curX = w / 2 - totalW / 2
-  const brandY = h / 2 - fontSize * 0.6
+  const brandY = startY + fontSize
 
   ctx.textAlign = 'left'
   ctx.textBaseline = 'alphabetic'
@@ -186,18 +190,26 @@ function drawEndCard(
     curX += widths[i]
   }
 
-  // "Make your own →" CTA
-  const ctaSize = Math.floor(w * 0.032)
+  // "Make your own" label above QR
+  const ctaSize = Math.floor(w * 0.028)
   ctx.font = `600 ${ctaSize}px "IBM Plex Sans", sans-serif`
   ctx.textAlign = 'center'
   ctx.fillStyle = INK_SOFT
-  ctx.fillText('Make your own →', w / 2, brandY + fontSize * 1.05 + ctaSize * 0.5)
+  const ctaY = brandY + fontSize * 0.22 + ctaSize * 1.4
+  ctx.fillText('Make your own', w / 2, ctaY)
 
-  // URL
-  const urlSize = Math.floor(w * 0.026)
-  ctx.font = `500 ${urlSize}px "IBM Plex Sans", sans-serif`
-  ctx.fillStyle = 'rgba(14,13,20,0.45)'
-  ctx.fillText(SITE_URL, w / 2, brandY + fontSize * 1.05 + ctaSize * 1.8 + urlSize)
+  // QR code image — white padded square with rounded corners
+  const qrX = (w - qrSize) / 2
+  const qrY = ctaY + ctaSize * 0.6
+  const pad = 16
+  const r = 18
+
+  ctx.fillStyle = '#ffffff'
+  ctx.beginPath()
+  ctx.roundRect(qrX - pad, qrY - pad, qrSize + pad * 2, qrSize + pad * 2, r)
+  ctx.fill()
+
+  ctx.drawImage(qrImg, qrX, qrY, qrSize, qrSize)
 
   ctx.globalAlpha = 1
   ctx.textAlign = 'left'
@@ -217,11 +229,19 @@ export function useVideoComposer() {
     }
 
     try {
-      // Load the product image
-      const productImg = await loadImage(imageUrl)
+      // Load the product image and generate QR code in parallel with audio fetch
+      const [productImg, qrDataUrl, audioResp] = await Promise.all([
+        loadImage(imageUrl),
+        QRCode.toDataURL(QR_URL, {
+          width: 512,
+          margin: 1,
+          color: { dark: INK, light: '#ffffff' },
+          errorCorrectionLevel: 'M',
+        }),
+        fetch(audioUrl),
+      ])
+      const qrImg = await loadImage(qrDataUrl)
 
-      // Fetch audio as an ArrayBuffer so we can decode it for duration
-      const audioResp = await fetch(audioUrl)
       const audioBuffer = await audioResp.arrayBuffer()
 
       // Decode to get the real duration
@@ -306,7 +326,7 @@ export function useVideoComposer() {
             const endProgress = Math.min((elapsed - audioDurationMs) / END_CARD_DURATION_MS, 1)
             // First frame of end card: draw main frame underneath then crossfade
             drawMainFrame(ctx, productImg, analyser, dataArray, CANVAS_SIZE, CANVAS_SIZE)
-            drawEndCard(ctx, CANVAS_SIZE, CANVAS_SIZE, endProgress)
+            drawEndCard(ctx, qrImg, CANVAS_SIZE, CANVAS_SIZE, endProgress)
           }
 
           if (elapsed >= totalDurationMs) {
