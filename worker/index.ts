@@ -32,6 +32,9 @@ type DbJingle = {
   replicate_output_url: string | null
   replicate_web_url: string | null
   delete_token: string | null
+  video_key: string | null
+  video_content_type: string | null
+  video_status: string | null
 }
 
 type ReplicatePrediction = {
@@ -107,9 +110,14 @@ const worker: ExportedHandler<Env> = {
       }
 
       // Matches with or without extension — extension ignored, kind drives the lookup
-      const mediaRoute = url.pathname.match(/^\/media\/jingles\/([0-9a-f-]+)\/(image|audio)(?:\.\w+)?$/)
+      const mediaRoute = url.pathname.match(/^\/media\/jingles\/([0-9a-f-]+)\/(image|audio|video)(?:\.\w+)?$/)
       if (request.method === 'GET' && mediaRoute) {
         return getMediaAsset(env, mediaRoute[1], mediaRoute[2])
+      }
+
+      const videoUploadRoute = url.pathname.match(/^\/api\/jingles\/([0-9a-f-]+)\/video$/)
+      if (request.method === 'POST' && videoUploadRoute) {
+        return handleVideoUpload(request, env, videoUploadRoute[1])
       }
 
       // Dynamic OG share page — /share/:id returns a minimal HTML page with
@@ -158,7 +166,8 @@ async function listJingles(request: Request, env: Env) {
     ? await env.DB.prepare(
         `SELECT id, status, image_key, image_content_type, audio_key, audio_content_type,
                 votes, created_at, updated_at, error_message,
-                replicate_prediction_id, replicate_output_url, replicate_web_url
+                replicate_prediction_id, replicate_output_url, replicate_web_url,
+                delete_token, video_key, video_content_type, video_status
          FROM jingles
          ORDER BY votes DESC, created_at DESC
          LIMIT ?1`,
@@ -166,7 +175,8 @@ async function listJingles(request: Request, env: Env) {
     : await env.DB.prepare(
         `SELECT id, status, image_key, image_content_type, audio_key, audio_content_type,
                 votes, created_at, updated_at, error_message,
-                replicate_prediction_id, replicate_output_url, replicate_web_url
+                replicate_prediction_id, replicate_output_url, replicate_web_url,
+                delete_token, video_key, video_content_type, video_status
          FROM jingles
          WHERE (votes < ?1)
             OR (votes = ?1 AND created_at < ?2)
@@ -501,7 +511,9 @@ async function getMediaAsset(env: Env, jingleId: string, kind: string) {
     return new Response('Not found', { status: 404 })
   }
 
-  const key = kind === 'image' ? record.image_key : record.audio_key
+  const key = kind === 'image' ? record.image_key
+    : kind === 'audio' ? record.audio_key
+    : record.video_key
   if (!key) {
     return new Response('Not found', { status: 404 })
   }
@@ -535,7 +547,10 @@ async function findJingle(env: Env, id: string) {
       replicate_prediction_id,
       replicate_output_url,
       replicate_web_url,
-      delete_token
+      delete_token,
+      video_key,
+      video_content_type,
+      video_status
     FROM jingles
     WHERE id = ?1`,
   )
@@ -579,9 +594,14 @@ async function getSharePage(request: Request, env: Env, id: string) {
     ? `A product jingle made with Google's Lyria 3 on Replicate, hosted on Cloudflare. ${record.votes} vote${record.votes === 1 ? '' : 's'} so far.`
     : 'Drop a product photo. Get a 30-second jingle made with Google\'s Lyria 3 on Replicate, hosted on Cloudflare.'
   const imageUrl = record ? `${origin}/media/jingles/${id}/image` : `${base}/favicon.svg`
+  const videoUrl = record?.video_key ? `${origin}/media/jingles/${id}/video` : null
+  const videoType = record?.video_content_type ?? 'video/webm'
   const pageUrl = `${base}/share/${id}`
   const appUrl = record ? `${base}/?jingle=${id}` : base
 
+  // When a share video exists, switch to og:video — this gives proper video
+  // cards on Slack, iMessage, Discord, LinkedIn, and Telegram. X is unreliable
+  // with og:video but falls back gracefully to the image card.
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -591,20 +611,28 @@ async function getSharePage(request: Request, env: Env, id: string) {
   <meta name="description" content="${escapeHtml(description)}" />
 
   <!-- Open Graph -->
-  <meta property="og:type" content="website" />
+  <meta property="og:type" content="${videoUrl ? 'video.other' : 'website'}" />
   <meta property="og:url" content="${escapeHtml(pageUrl)}" />
   <meta property="og:title" content="${escapeHtml(title)}" />
   <meta property="og:description" content="${escapeHtml(description)}" />
   <meta property="og:image" content="${escapeHtml(imageUrl)}" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
-  <meta property="og:site_name" content="jingle jAIngle" />
+  <meta property="og:site_name" content="jingle jAIngle" />${videoUrl ? `
+  <meta property="og:video" content="${escapeHtml(videoUrl)}" />
+  <meta property="og:video:secure_url" content="${escapeHtml(videoUrl)}" />
+  <meta property="og:video:type" content="${escapeHtml(videoType)}" />
+  <meta property="og:video:width" content="1080" />
+  <meta property="og:video:height" content="1080" />` : ''}
 
   <!-- Twitter / X Card -->
-  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:card" content="${videoUrl ? 'player' : 'summary_large_image'}" />
   <meta name="twitter:title" content="${escapeHtml(title)}" />
   <meta name="twitter:description" content="${escapeHtml(description)}" />
-  <meta name="twitter:image" content="${escapeHtml(imageUrl)}" />
+  <meta name="twitter:image" content="${escapeHtml(imageUrl)}" />${videoUrl ? `
+  <meta name="twitter:player" content="${escapeHtml(videoUrl)}" />
+  <meta name="twitter:player:width" content="1080" />
+  <meta name="twitter:player:height" content="1080" />` : ''}
 
   <!-- Immediately redirect humans to the app -->
   <meta http-equiv="refresh" content="0; url=${escapeHtml(appUrl)}" />
@@ -615,11 +643,59 @@ async function getSharePage(request: Request, env: Env, id: string) {
 </body>
 </html>`
 
+  // Shorter cache when no video yet — so the card upgrades quickly after upload
+  const cacheControl = videoUrl ? 'public, max-age=3600' : 'public, max-age=30'
+
   return new Response(html, {
-    headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=60' },
+    headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': cacheControl },
   })
 }
 
+
+async function handleVideoUpload(request: Request, env: Env, jingleId: string) {
+  const record = await findJingle(env, jingleId)
+  if (!record) return json({ error: 'Jingle not found.' }, 404)
+  if (record.status !== 'succeeded') return json({ error: 'Only succeeded jingles can have a share video.' }, 409)
+
+  const contentType = request.headers.get('content-type') || 'video/webm'
+
+  // Sanity-check content type — only accept video
+  if (!contentType.startsWith('video/')) {
+    return json({ error: 'Only video uploads are accepted.' }, 400)
+  }
+
+  const body = await request.arrayBuffer()
+
+  // 200MB hard cap — share videos should be well under this
+  if (body.byteLength > 200 * 1024 * 1024) {
+    return json({ error: 'Video too large. Maximum 200MB.' }, 413)
+  }
+
+  const ext = contentType.includes('mp4') ? '.mp4' : '.webm'
+  const videoKey = `video/${jingleId}${ext}`
+
+  await env.MEDIA_BUCKET.put(videoKey, body, {
+    httpMetadata: {
+      contentType,
+      cacheControl: 'public, max-age=31536000, immutable',
+    },
+  })
+
+  await env.DB.prepare(
+    `UPDATE jingles
+     SET video_key = ?2,
+         video_content_type = ?3,
+         video_status = 'succeeded',
+         updated_at = ?4
+     WHERE id = ?1`,
+  ).bind(jingleId, videoKey, contentType, new Date().toISOString()).run()
+
+  const origin = new URL(request.url).origin
+  return json({
+    ok: true,
+    videoUrl: `${origin}/media/jingles/${jingleId}/video`,
+  }, 201)
+}
 
 async function verifyTurnstile(token: string, secret: string, ip?: string) {
   const body = new FormData()
@@ -655,6 +731,8 @@ function serializeJingle(record: DbJingle, origin: string, votedIds: Set<string>
     votes: record.votes,
     imageUrl: `${origin}/media/jingles/${record.id}/image`,
     audioUrl: record.audio_key ? `${origin}/media/jingles/${record.id}/audio` : null,
+    videoUrl: record.video_key ? `${origin}/media/jingles/${record.id}/video` : null,
+    videoStatus: record.video_status ?? null,
     shareUrl: `${base}/share/${record.id}`,
     hasVoted: votedIds.has(record.id),
     errorMessage: record.error_message,
