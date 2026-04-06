@@ -409,7 +409,8 @@ function HomePage() {
 
   function handleShareX(jingle: Jingle) {
     const text = encodeURIComponent('Check out this product jingle made with Google\'s Lyria 3 on Replicate, hosted on Cloudflare. #jingleJAIngle')
-    const url = encodeURIComponent(jingle.shareUrl)
+    // If a share video exists, link directly to the video file so X shows it inline
+    const url = encodeURIComponent(jingle.videoUrl ?? jingle.shareUrl)
     window.open(`https://x.com/intent/tweet?text=${text}&url=${url}`, '_blank', 'noopener,noreferrer')
   }
 
