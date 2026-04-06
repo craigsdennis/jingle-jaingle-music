@@ -14,7 +14,7 @@ type Env = {
 
 const PAGE_SIZE = 12
 // Rate limit: max generations per IP per window
-const RATE_LIMIT_MAX = 5
+const RATE_LIMIT_MAX = 100
 const RATE_LIMIT_WINDOW_SECONDS = 3600 // 1 hour
 
 type DbJingle = {
@@ -276,6 +276,8 @@ async function createJingle(request: Request, env: Env) {
   const dataUri = `data:${image.type};base64,${base64}`
 
   const nsfwResult = await checkImageNsfw(dataUri, env.REPLICATE_API_TOKEN)
+  // TEST MODE: force unsafe to verify rejection path — remove before shipping
+  // const nsfwResult = 'unsafe'
   if (nsfwResult === 'unsafe') {
     return json({ error: 'This image was flagged as inappropriate and cannot be used.' }, 422)
   }
@@ -726,12 +728,12 @@ async function checkImageNsfw(dataUri: string, replicateToken: string): Promise<
       headers: {
         authorization: `Bearer ${replicateToken}`,
         'content-type': 'application/json',
-        'prefer': 'wait=30', // block up to 30s for a synchronous result
+        'prefer': 'wait=60',
       },
       body: JSON.stringify({
         version: 'b04f49b037b3a1476128f1c7434cf64385ccec6dc7d7d344647df0fc2103892c',
         input: {
-          prompt: '<image>Does this image contain nudity, sexual content, graphic violence, or any other content that would be inappropriate for a public product commercial? Reply with only the word "safe" or "unsafe".',
+          prompt: '<image>You are a content moderator for a family-friendly product jingle app. Does this image contain any of the following: nudity or sexual content, graphic violence or gore, blood or injury, offensive gestures, hate symbols, or anything else inappropriate for a public-facing commercial product? Reply with only the single word "safe" or "unsafe".',
           image_input: [dataUri],
           max_completion_tokens: 16,
           temperature: 0,
@@ -741,7 +743,30 @@ async function checkImageNsfw(dataUri: string, replicateToken: string): Promise<
 
     if (!res.ok) return 'unknown'
 
-    const prediction = (await res.json()) as { status?: string; output?: string[] }
+    const prediction = (await res.json()) as { id?: string; status?: string; output?: string[]; urls?: { get?: string } }
+
+    // If Prefer: wait returned before completion, poll until done (max ~30s)
+    if (prediction.status === 'starting' || prediction.status === 'processing') {
+      const getUrl = prediction.urls?.get
+      if (!getUrl) return 'unknown'
+
+      for (let i = 0; i < 10; i++) {
+        await new Promise((r) => setTimeout(r, 3000))
+        const pollRes = await fetch(getUrl, {
+          headers: { authorization: `Bearer ${replicateToken}` },
+        })
+        if (!pollRes.ok) return 'unknown'
+        const polled = (await pollRes.json()) as { status?: string; output?: string[] }
+        if (polled.status === 'succeeded') {
+          const text = polled.output?.join('').trim().toLowerCase() ?? ''
+          if (text.startsWith('unsafe')) return 'unsafe'
+          if (text.startsWith('safe')) return 'safe'
+          return 'unknown'
+        }
+        if (polled.status === 'failed' || polled.status === 'canceled') return 'unknown'
+      }
+      return 'unknown' // timed out — fail open
+    }
 
     if (prediction.status !== 'succeeded' || !prediction.output) return 'unknown'
 
