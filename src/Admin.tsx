@@ -1,117 +1,103 @@
-import { useState, useEffect, useCallback } from 'react'
-import { Button, Loader, Surface, Badge } from '@cloudflare/kumo'
-import { ArrowLeft, FilmStrip, MusicNotes, Sparkle, Trophy } from '@phosphor-icons/react'
+import { useCallback, useEffect, useState } from 'react'
+import { Badge, Button, Loader, Surface } from '@cloudflare/kumo'
+import { ArrowLeft, MusicNotes, Sparkle, Trash } from '@phosphor-icons/react'
 
 type Props = { onBack: () => void }
 
-type AdminStatus = {
-  topJingle: {
-    id: string
-    votes: number
-    imageUrl: string
-    audioUrl: string | null
-    videoUrl: string | null
-    videoStatus: string | null
-    createdAt: string
-  } | null
+type JingleStatus = 'queued' | 'processing' | 'succeeded' | 'failed'
+
+type AdminJingle = {
+  id: string
+  status: JingleStatus
+  votes: number
+  imageUrl: string
+  audioUrl: string | null
+  videoUrl: string | null
+  videoStatus: string | null
+  errorMessage: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+type AdminResponse = {
+  jingles: AdminJingle[]
 }
 
 type ApiError = { error?: string }
 
 function readError(payload: unknown, fallback: string) {
   if (payload && typeof payload === 'object' && 'error' in payload) {
-    const c = (payload as ApiError).error
-    if (typeof c === 'string' && c.trim()) return c
+    const candidate = (payload as ApiError).error
+    if (typeof candidate === 'string' && candidate.trim()) return candidate
   }
   return fallback
 }
 
+function statusLabel(status: JingleStatus) {
+  switch (status) {
+    case 'queued': return 'Queued'
+    case 'processing': return 'Processing'
+    case 'succeeded': return 'Ready'
+    case 'failed': return 'Failed'
+  }
+}
+
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat('en', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value))
+}
+
 export function AdminPage({ onBack }: Props) {
-  const [adminToken, setAdminToken] = useState(() =>
-    localStorage.getItem('jj_admin_token') ?? ''
-  )
-  const [tokenInput, setTokenInput] = useState('')
-  const [status, setStatus] = useState<AdminStatus | null>(null)
+  const [jingles, setJingles] = useState<AdminJingle[]>([])
   const [isLoading, setIsLoading] = useState(false)
-  const [isGenerating, setIsGenerating] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
-  const fetchStatus = useCallback(async (token: string) => {
+  const loadJingles = useCallback(async () => {
     setIsLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/admin/status', {
-        headers: { authorization: `Bearer ${token}` },
-      })
-      const payload = await res.json() as AdminStatus | ApiError
+      const res = await fetch('/api/admin/jingles')
+      const payload = await res.json() as AdminResponse | ApiError
       if (!res.ok) {
-        throw new Error(readError(payload, 'Could not fetch admin status.'))
+        throw new Error(readError(payload, 'Could not load admin jingles.'))
       }
-      setStatus(payload as AdminStatus)
+      setJingles((payload as AdminResponse).jingles)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not fetch admin status.')
+      setError(e instanceof Error ? e.message : 'Could not load admin jingles.')
     } finally {
       setIsLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    if (adminToken) void fetchStatus(adminToken)
-  }, [adminToken, fetchStatus])
+    void loadJingles()
+  }, [loadJingles])
 
-  // Poll while video is processing
-  useEffect(() => {
-    const vs = status?.topJingle?.videoStatus
-    if (vs !== 'queued' && vs !== 'processing') return
-    const t = window.setInterval(() => void fetchStatus(adminToken), 6000)
-    return () => window.clearInterval(t)
-  }, [status?.topJingle?.videoStatus, adminToken, fetchStatus])
+  async function handleDelete(jingle: AdminJingle) {
+    const confirmed = window.confirm(`Delete jingle ${jingle.id.slice(0, 8)}? This cannot be undone.`)
+    if (!confirmed) return
 
-  function handleTokenSubmit() {
-    const t = tokenInput.trim()
-    if (!t) return
-    localStorage.setItem('jj_admin_token', t)
-    setAdminToken(t)
-    setTokenInput('')
-  }
-
-  async function handleGenerateVideo(jingleId?: string) {
-    setIsGenerating(true)
+    setDeletingId(jingle.id)
     setError(null)
     setNotice(null)
+
     try {
-      const res = await fetch('/api/admin/video', {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${adminToken}`,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify(jingleId ? { jingleId } : {}),
-      })
-      const payload = await res.json() as { ok?: boolean; jingleId?: string; predictionId?: string } | ApiError
+      const res = await fetch(`/api/admin/jingles/${jingle.id}`, { method: 'DELETE' })
+      const payload = await res.json() as { ok?: boolean } | ApiError
       if (!res.ok) {
-        throw new Error(readError(payload, 'Could not start video generation.'))
+        throw new Error(readError(payload, 'Could not delete jingle.'))
       }
-      setNotice(`Video queued for jingle ${(payload as { jingleId?: string }).jingleId ?? ''}. Polling for results...`)
-      await fetchStatus(adminToken)
+
+      setJingles((current) => current.filter((item) => item.id !== jingle.id))
+      setNotice(`Deleted jingle ${jingle.id.slice(0, 8)}.`)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not start video generation.')
+      setError(e instanceof Error ? e.message : 'Could not delete jingle.')
     } finally {
-      setIsGenerating(false)
-    }
-  }
-
-  const jingle = status?.topJingle
-  const videoStatus = jingle?.videoStatus
-
-  function videoStatusLabel(s: string | null | undefined) {
-    switch (s) {
-      case 'queued': return 'Queued'
-      case 'processing': return 'Rendering'
-      case 'succeeded': return 'Ready'
-      case 'failed': return 'Failed'
-      default: return 'No video'
+      setDeletingId(null)
     }
   }
 
@@ -122,143 +108,104 @@ export function AdminPage({ onBack }: Props) {
           Back to studio
         </Button>
         <h1 className="about-title">Admin</h1>
-        <p className="about-lead">Generate a commercial video for the top-rated jingle using Wan 2.7 image-to-video.</p>
+        <p className="about-lead">
+          Review uploaded jingles and delete them. Protect <code>/admin</code> and <code>/api/admin/*</code> with Cloudflare Access.
+        </p>
       </div>
 
-      {/* Token gate */}
-      {!adminToken && (
-        <Surface className="panel">
-          <p className="small-label" style={{ marginBottom: '0.75rem' }}>Admin token</p>
-          <div style={{ display: 'flex', gap: '0.75rem' }}>
-            <input
-              className="token-input"
-              type="password"
-              placeholder="Enter your ADMIN_TOKEN"
-              value={tokenInput}
-              onChange={(e) => setTokenInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleTokenSubmit()}
-            />
-            <Button variant="primary" onClick={handleTokenSubmit}>
-              Unlock
-            </Button>
-          </div>
-        </Surface>
+      {(error || notice) && (
+        <div className="message-strip" role={error ? 'alert' : 'status'}>
+          {error ?? notice}
+        </div>
       )}
 
-      {adminToken && (
-        <>
-          {(error || notice) && (
-            <div className="message-strip" role={error ? 'alert' : 'status'}>
-              {error ?? notice}
-            </div>
-          )}
+      <Surface className="panel">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '1rem' }}>
+          <h2 style={{ margin: 0, fontSize: '1rem' }}>Jingles</h2>
+          <Button variant="ghost" size="sm" icon={Sparkle} onClick={() => void loadJingles()}>
+            Refresh
+          </Button>
+        </div>
 
-          <Surface className="panel">
-            <div className="panel-heading-row">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                <Trophy size={20} weight="fill" />
-                <h2 className="admin-section-title">Top jingle</h2>
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                icon={Sparkle}
-                onClick={() => void fetchStatus(adminToken)}
+        {isLoading ? (
+          <div className="empty-state">
+            <Loader size="lg" />
+          </div>
+        ) : jingles.length === 0 ? (
+          <div className="empty-state">
+            <MusicNotes size={32} />
+            <p>No jingles found.</p>
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: '1rem' }}>
+            {jingles.map((jingle) => (
+              <article
+                key={jingle.id}
+                style={{
+                  display: 'grid',
+                  gap: '1rem',
+                  padding: '1rem',
+                  border: '1px solid var(--line)',
+                  borderRadius: '1rem',
+                  background: 'rgba(255, 255, 255, 0.6)',
+                }}
               >
-                Refresh
-              </Button>
-            </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '140px minmax(0, 1fr)', gap: '1rem', alignItems: 'start' }}>
+                  <img
+                    src={jingle.imageUrl}
+                    alt="Uploaded product"
+                    style={{
+                      width: '100%',
+                      aspectRatio: '1',
+                      objectFit: 'contain',
+                      objectPosition: 'center',
+                      borderRadius: '0.85rem',
+                      border: '1px solid var(--line)',
+                      background: 'rgba(255, 255, 255, 0.8)',
+                    }}
+                  />
 
-            {isLoading && !jingle ? (
-              <div className="empty-state"><Loader size="lg" /></div>
-            ) : jingle ? (
-              <div className="admin-jingle">
-                <img className="admin-img" src={jingle.imageUrl} alt="Top jingle product" />
+                  <div style={{ display: 'grid', gap: '0.7rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+                      <code>{jingle.id}</code>
+                      <Badge>{statusLabel(jingle.status)}</Badge>
+                    </div>
 
-                <div className="admin-meta">
-                  <div className="admin-meta-row">
-                    <span>ID</span>
-                    <code>{jingle.id.slice(0, 8)}…</code>
-                  </div>
-                  <div className="admin-meta-row">
-                    <span>Votes</span>
-                    <strong>{jingle.votes}</strong>
-                  </div>
-                  <div className="admin-meta-row">
-                    <span>Audio</span>
-                    <Badge>{jingle.audioUrl ? 'Ready' : 'Missing'}</Badge>
-                  </div>
-                  <div className="admin-meta-row">
-                    <span>Video</span>
-                    <Badge>{videoStatusLabel(videoStatus)}</Badge>
+                    <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', fontSize: '0.88rem', color: 'var(--ink-soft)' }}>
+                      <span>{jingle.votes} vote{jingle.votes === 1 ? '' : 's'}</span>
+                      <span>Created {formatDate(jingle.createdAt)}</span>
+                      <span>Updated {formatDate(jingle.updatedAt)}</span>
+                    </div>
+
+                    {jingle.audioUrl && (
+                      <audio className="audio-player" controls preload="none" src={jingle.audioUrl} />
+                    )}
+
+                    {jingle.errorMessage && (
+                      <div className="status-panel status-failed">
+                        <p>{jingle.errorMessage}</p>
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                {jingle.audioUrl && (
-                  <div className="admin-audio">
-                    <p className="small-label">Jingle audio</p>
-                    <audio className="audio-player" controls preload="none" src={jingle.audioUrl} />
-                  </div>
-                )}
-
-                {videoStatus === 'succeeded' && jingle.videoUrl ? (
-                  <div className="admin-video">
-                    <p className="small-label">Generated commercial video</p>
-                    <video
-                      className="admin-video-player"
-                      controls
-                      preload="none"
-                      src={jingle.videoUrl}
-                    />
-                  </div>
-                ) : (videoStatus === 'queued' || videoStatus === 'processing') ? (
-                  <div className="status-panel">
-                    <Loader size="sm" />
-                    <p>Wan 2.7 is rendering the video — checking every 6 seconds&hellip;</p>
-                  </div>
-                ) : null}
-
-                <div className="admin-actions">
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                   <Button
-                    variant="primary"
-                    icon={FilmStrip}
-                    loading={isGenerating}
-                    disabled={!jingle.audioUrl}
-                    onClick={() => void handleGenerateVideo(jingle.id)}
+                    variant="ghost"
+                    size="sm"
+                    icon={Trash}
+                    className="delete-btn"
+                    loading={deletingId === jingle.id}
+                    onClick={() => void handleDelete(jingle)}
                   >
-                    {videoStatus === 'succeeded' ? 'Regenerate video' : 'Generate commercial video'}
+                    Delete
                   </Button>
                 </div>
-
-                {!jingle.audioUrl && (
-                  <p className="small-copy" style={{ color: 'var(--ink-soft)', marginTop: '0.5rem' }}>
-                    This jingle has no audio yet — wait for Lyria to finish before generating video.
-                  </p>
-                )}
-              </div>
-            ) : (
-              <div className="empty-state">
-                <MusicNotes size={32} />
-                <p>No succeeded jingles yet. Generate some first.</p>
-              </div>
-            )}
-          </Surface>
-
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                localStorage.removeItem('jj_admin_token')
-                setAdminToken('')
-                setStatus(null)
-              }}
-            >
-              Clear token
-            </Button>
+              </article>
+            ))}
           </div>
-        </>
-      )}
+        )}
+      </Surface>
     </div>
   )
 }

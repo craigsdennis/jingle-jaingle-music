@@ -1,4 +1,5 @@
 type JingleStatus = 'queued' | 'processing' | 'succeeded' | 'failed'
+type VideoStatus = 'queued' | 'processing' | 'succeeded' | 'failed'
 
 type Env = {
   ASSETS: Fetcher
@@ -14,7 +15,7 @@ type Env = {
 
 const PAGE_SIZE = 12
 // Rate limit: max generations per IP per window
-const RATE_LIMIT_MAX = 100
+const RATE_LIMIT_MAX = 5
 const RATE_LIMIT_WINDOW_SECONDS = 3600 // 1 hour
 
 type DbJingle = {
@@ -34,7 +35,9 @@ type DbJingle = {
   delete_token: string | null
   video_key: string | null
   video_content_type: string | null
-  video_status: string | null
+  video_status: VideoStatus | null
+  video_error: string | null
+  video_replicate_id: string | null
 }
 
 type ReplicatePrediction = {
@@ -86,6 +89,15 @@ const worker: ExportedHandler<Env> = {
         return listJingles(request, env)
       }
 
+      if (request.method === 'GET' && url.pathname === '/api/admin/jingles') {
+        return listAdminJingles(request, env)
+      }
+
+      const adminDeleteRoute = url.pathname.match(/^\/api\/admin\/jingles\/([0-9a-f-]+)$/)
+      if (request.method === 'DELETE' && adminDeleteRoute) {
+        return deleteAdminJingle(env, adminDeleteRoute[1])
+      }
+
       const jingleRoute = url.pathname.match(/^\/api\/jingles\/([0-9a-f-]+)$/)
       if (request.method === 'GET' && jingleRoute) {
         return getJingle(request, env, jingleRoute[1])
@@ -125,6 +137,11 @@ const worker: ExportedHandler<Env> = {
       const shareRoute = url.pathname.match(/^\/share\/([0-9a-f-]+)$/)
       if (request.method === 'GET' && shareRoute) {
         return getSharePage(request, env, shareRoute[1])
+      }
+
+      if ((request.method === 'GET' || request.method === 'HEAD') && (url.pathname === '/admin' || url.pathname === '/admin/')) {
+        const assetUrl = new URL('/', request.url)
+        return env.ASSETS.fetch(new Request(assetUrl.toString(), request))
       }
 
       return env.ASSETS.fetch(request)
@@ -167,7 +184,8 @@ async function listJingles(request: Request, env: Env) {
         `SELECT id, status, image_key, image_content_type, audio_key, audio_content_type,
                 votes, created_at, updated_at, error_message,
                 replicate_prediction_id, replicate_output_url, replicate_web_url,
-                delete_token, video_key, video_content_type, video_status
+                delete_token, video_key, video_content_type, video_status,
+                video_error, video_replicate_id
          FROM jingles
          ORDER BY votes DESC, created_at DESC
          LIMIT ?1`,
@@ -176,7 +194,8 @@ async function listJingles(request: Request, env: Env) {
         `SELECT id, status, image_key, image_content_type, audio_key, audio_content_type,
                 votes, created_at, updated_at, error_message,
                 replicate_prediction_id, replicate_output_url, replicate_web_url,
-                delete_token, video_key, video_content_type, video_status
+                delete_token, video_key, video_content_type, video_status,
+                video_error, video_replicate_id
          FROM jingles
          WHERE (votes < ?1)
             OR (votes = ?1 AND created_at < ?2)
@@ -211,6 +230,55 @@ async function getJingle(request: Request, env: Env, id: string) {
   return json({
     jingle: serializeJingle(record, new URL(request.url).origin, readVotedIds(request.headers.get('cookie')), env.SITE_URL),
   })
+}
+
+async function listAdminJingles(request: Request, env: Env) {
+  const origin = new URL(request.url).origin
+
+  const result = await env.DB.prepare(
+    `SELECT
+      id,
+      status,
+      image_key,
+      image_content_type,
+      audio_key,
+      audio_content_type,
+      votes,
+      created_at,
+      updated_at,
+      error_message,
+      replicate_prediction_id,
+      replicate_output_url,
+      replicate_web_url,
+      delete_token,
+      video_key,
+      video_content_type,
+      video_status,
+      video_error,
+      video_replicate_id
+    FROM jingles
+    ORDER BY created_at DESC
+    LIMIT 100`,
+  ).all<DbJingle>()
+
+  return json({
+    jingles: result.results.map((jingle) => serializeJingle(jingle, origin, new Set(), env.SITE_URL)),
+  })
+}
+
+async function deleteAdminJingle(env: Env, id: string) {
+  const record = await findJingle(env, id)
+
+  if (!record) {
+    return json({ error: 'Jingle not found.' }, 404)
+  }
+
+  const keysToDelete = [record.image_key, record.audio_key, record.video_key].filter(Boolean) as string[]
+  await Promise.allSettled(keysToDelete.map((key) => env.MEDIA_BUCKET.delete(key)))
+
+  await env.DB.prepare('DELETE FROM jingles WHERE id = ?1').bind(id).run()
+
+  return json({ ok: true })
 }
 
 async function createJingle(request: Request, env: Env) {
@@ -574,7 +642,9 @@ async function findJingle(env: Env, id: string) {
       delete_token,
       video_key,
       video_content_type,
-      video_status
+      video_status,
+      video_error,
+      video_replicate_id
     FROM jingles
     WHERE id = ?1`,
   )
@@ -598,7 +668,7 @@ async function deleteJingle(request: Request, env: Env, id: string) {
   }
 
   // Delete R2 objects — best effort, don't fail if already gone
-  const keysToDelete = [record.image_key, record.audio_key].filter(Boolean) as string[]
+  const keysToDelete = [record.image_key, record.audio_key, record.video_key].filter(Boolean) as string[]
   await Promise.allSettled(keysToDelete.map((key) => env.MEDIA_BUCKET.delete(key)))
 
   await env.DB.prepare('DELETE FROM jingles WHERE id = ?1').bind(id).run()

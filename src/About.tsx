@@ -36,7 +36,7 @@ const steps: Step[] = [
   },
   {
     icon: <ShieldCheck size={28} weight="duotone" />,
-    title: 'Turnstile verifies the request server-side',
+    title: 'Turnstile and rate limits gate the request',
     body: (
       <>
         The photo and the Turnstile token arrive together as a multipart form POST to the{' '}
@@ -51,8 +51,10 @@ const steps: Step[] = [
         >
           siteverify API
         </a>{' '}
-        to confirm the token is genuine and hasn&apos;t already been used. A missing or invalid
-        token gets a 403 — the upload stops there.
+        to confirm the token is genuine and hasn&apos;t already been used. Before the Worker writes
+        to R2 or calls Replicate, it also checks a Cloudflare KV-backed per-IP rate limit. Right
+        now that limit is five uploads per hour per IP. A missing or invalid token gets a 403;
+        an over-limit request gets a 429.
       </>
     ),
   },
@@ -168,6 +170,11 @@ const stack: StackRow[] = [
     href: 'https://developers.cloudflare.com/turnstile/',
   },
   {
+    label: 'Rate limiting',
+    detail: 'Cloudflare KV — 5 uploads per IP per hour before the Worker spends AI budget',
+    href: 'https://developers.cloudflare.com/kv/',
+  },
+  {
     label: 'Media storage',
     detail: 'Cloudflare R2 — product images and generated audio',
     href: 'https://developers.cloudflare.com/r2/',
@@ -188,6 +195,11 @@ const stack: StackRow[] = [
     href: 'https://developers.cloudflare.com/workers/static-assets/',
   },
   {
+    label: 'Admin access',
+    detail: 'Cloudflare Access — protects /admin and /api/admin/* for moderation and deletes',
+    href: 'https://developers.cloudflare.com/cloudflare-one/applications/configure-apps/self-hosted-apps/',
+  },
+  {
     label: 'Social sharing',
     detail: 'Dynamic Open Graph + Twitter Card meta per jingle',
     href: 'https://ogp.me/',
@@ -206,7 +218,8 @@ export function AboutPage({ onBack }: Props) {
         </h1>
         <p className="about-lead">
           Drop a product photo. Get a commercial jingle. Here&apos;s what happens between those two
-          moments — and what&apos;s keeping the bots out.
+          moments — plus what keeps uploads rate-limited and the admin tools behind Cloudflare
+          Access.
         </p>
       </div>
 

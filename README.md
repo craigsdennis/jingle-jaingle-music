@@ -11,6 +11,7 @@ Drop a product photo. Get a 30-second commercial jingle made with Google's Lyria
 3. The model picks a random commercial style (pop jingle, lo-fi, orchestral, 80s synth-pop, country, soul, kids, or luxury minimalist) and generates a 30-second 48 kHz stereo MP3.
 4. When the Replicate webhook fires, the audio is backed up to R2 and the jingle appears on a public leaderboard.
 5. Anyone can listen, vote, and share. The uploader gets a delete button (token stored in `localStorage`).
+6. A protected `/admin` page can review recent jingles and delete them.
 
 ---
 
@@ -26,6 +27,7 @@ Drop a product photo. Get a 30-second commercial jingle made with Google's Lyria
 | Database | Cloudflare D1 (SQLite) — jingle metadata, vote counts, delete tokens |
 | AI model | [google/lyria-3](https://replicate.com/google/lyria-3) via Replicate |
 | Static assets | Cloudflare Workers Assets |
+| Admin access | Cloudflare Access — protects `/admin` and `/api/admin/*` |
 | Social sharing | Dynamic Open Graph + Twitter Card meta served from `/share/:id` |
 
 ---
@@ -36,11 +38,12 @@ Drop a product photo. Get a 30-second commercial jingle made with Google's Lyria
 jingle-jaingle/
 ├── worker/
 │   └── index.ts          # Cloudflare Worker — all API routes
-├── src/
-│   ├── App.tsx            # Main React app (upload, leaderboard, inline player)
-│   ├── About.tsx          # How it works page
-│   ├── main.tsx
-│   ├── App.css
+ ├── src/
+ │   ├── App.tsx            # Main React app (upload, leaderboard, inline player)
+ │   ├── Admin.tsx          # Admin review/delete page
+ │   ├── About.tsx          # How it works page
+ │   ├── main.tsx
+ │   ├── App.css
 │   ├── index.css
 │   └── globals.d.ts
 ├── migrations/
@@ -150,6 +153,8 @@ All routes are handled by the single Worker in `worker/index.ts`.
 | `POST` | `/api/jingles` | Create — multipart form with `image` + `cf-turnstile-response` |
 | `POST` | `/api/jingles/:id/vote` | Vote (cookie-deduplicated) |
 | `DELETE` | `/api/jingles/:id` | Delete — requires `Authorization: Bearer <delete_token>` |
+| `GET` | `/api/admin/jingles` | Admin list of jingles |
+| `DELETE` | `/api/admin/jingles/:id` | Admin delete route |
 | `POST` | `/api/replicate/webhook` | Replicate completion callback |
 | `GET` | `/media/jingles/:id/image` | Serve product image from R2 |
 | `GET` | `/media/jingles/:id/audio` | Serve generated audio from R2 |
@@ -179,6 +184,19 @@ const RATE_LIMIT_WINDOW_SECONDS = 3600
 ```
 
 Adjust as needed before deploying.
+
+---
+
+## Admin
+
+The app includes an admin page at `/admin` for reviewing uploaded jingles and deleting them.
+
+In production, protect both of these with Cloudflare Access:
+
+- `/admin`
+- `/api/admin/*`
+
+Local dev does not enforce admin auth on its own. The intended production setup is Access in front of the Worker, not an application-level `ADMIN_TOKEN` check.
 
 ---
 

@@ -14,6 +14,7 @@ import {
   XLogo,
 } from '@phosphor-icons/react'
 import { AboutPage } from './About'
+import { AdminPage } from './Admin'
 import { VideoComposerModal } from './VideoComposer'
 import './App.css'
 
@@ -40,6 +41,16 @@ type JingleResponse = { jingle: Jingle; deleteToken?: string }
 type ApiError = { error?: string }
 
 const POLL_INTERVAL_MS = 6000
+
+type Page = 'home' | 'about' | 'admin'
+
+function readPageFromLocation(): Page {
+  if (window.location.pathname === '/admin' || window.location.pathname === '/admin/') {
+    return 'admin'
+  }
+
+  return window.location.hash === '#about' ? 'about' : 'home'
+}
 
 function formatRelativeTime(value: string) {
   const date = new Date(value)
@@ -100,18 +111,30 @@ function CopyLinkRow({ url }: { url: string }) {
 }
 
 export default function App() {
-  const [page, setPage] = useState<'home' | 'about'>(() =>
-    window.location.hash === '#about' ? 'about' : 'home'
-  )
+  const [page, setPage] = useState<Page>(() => readPageFromLocation())
 
   useEffect(() => {
-    const onHash = () => setPage(window.location.hash === '#about' ? 'about' : 'home')
-    window.addEventListener('hashchange', onHash)
-    return () => window.removeEventListener('hashchange', onHash)
+    const syncPage = () => setPage(readPageFromLocation())
+    window.addEventListener('hashchange', syncPage)
+    window.addEventListener('popstate', syncPage)
+    return () => {
+      window.removeEventListener('hashchange', syncPage)
+      window.removeEventListener('popstate', syncPage)
+    }
   }, [])
 
-  function nav(to: 'home' | 'about') {
-    window.location.hash = to === 'about' ? '#about' : ''
+  function nav(to: Page) {
+    const next = new URL(window.location.href)
+
+    if (to === 'admin') {
+      next.pathname = '/admin'
+      next.hash = ''
+    } else {
+      next.pathname = '/'
+      next.hash = to === 'about' ? '#about' : ''
+    }
+
+    window.history.pushState({}, '', next)
     setPage(to)
   }
 
@@ -148,6 +171,8 @@ export default function App() {
 
       {page === 'about' ? (
         <AboutPage onBack={() => nav('home')} />
+      ) : page === 'admin' ? (
+        <AdminPage onBack={() => nav('home')} />
       ) : (
         <HomePage />
       )}
