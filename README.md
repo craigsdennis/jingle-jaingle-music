@@ -8,7 +8,7 @@ Drop a product photo. Get a 30-second commercial jingle made with Google's Lyria
 
 1. You upload a product photo — that is the **only** user-controlled input.
 2. A Cloudflare Worker stores the image in R2 and kicks off a Replicate prediction using `google/lyria-3`.
-3. The model picks a random commercial style (pop jingle, lo-fi, orchestral, 80s synth-pop, country, soul, kids, or luxury minimalist) and generates a 30-second 48 kHz stereo MP3.
+3. The model reads the product image and tries to generate the kind of commercial music a likely buyer would respond to, then renders a 30-second 48 kHz stereo MP3.
 4. When the Replicate webhook fires, the audio is backed up to R2 and the jingle appears on a public leaderboard.
 5. Anyone can listen, vote, and share. The uploader gets a delete button (token stored in `localStorage`).
 6. A protected `/admin` page can review recent jingles and delete them.
@@ -23,6 +23,7 @@ Drop a product photo. Get a 30-second commercial jingle made with Google's Lyria
 | Runtime | Cloudflare Worker (TypeScript) |
 | Bot protection | Cloudflare Turnstile — invisible challenge on every upload |
 | Rate limiting | Cloudflare KV — 5 generations per IP per hour |
+| Content moderation | Meta Llama Guard 4 via Replicate — screens uploads before storage |
 | Media storage | Cloudflare R2 — product images and generated audio |
 | Database | Cloudflare D1 (SQLite) — jingle metadata, vote counts, delete tokens |
 | AI model | [google/lyria-3](https://replicate.com/google/lyria-3) via Replicate |
@@ -38,12 +39,12 @@ Drop a product photo. Get a 30-second commercial jingle made with Google's Lyria
 jingle-jaingle/
 ├── worker/
 │   └── index.ts          # Cloudflare Worker — all API routes
- ├── src/
- │   ├── App.tsx            # Main React app (upload, leaderboard, inline player)
- │   ├── Admin.tsx          # Admin review/delete page
- │   ├── About.tsx          # How it works page
- │   ├── main.tsx
- │   ├── App.css
+├── src/
+│   ├── App.tsx            # Main React app (upload, leaderboard, inline player)
+│   ├── Admin.tsx          # Admin review/delete page
+│   ├── About.tsx          # How it works page
+│   ├── main.tsx
+│   ├── App.css
 │   ├── index.css
 │   └── globals.d.ts
 ├── migrations/

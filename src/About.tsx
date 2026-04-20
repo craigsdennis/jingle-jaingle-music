@@ -60,10 +60,12 @@ const steps: Step[] = [
   },
   {
     icon: <Database size={28} weight="duotone" />,
-    title: 'The Worker stores the image in R2',
+    title: 'The Worker screens the image, then stores it in R2',
     body: (
       <>
-        Once verified, the Worker writes the raw image bytes into a{' '}
+        Once verified, the Worker first runs the image through Meta&apos;s Llama Guard 4 on
+        Replicate to catch obviously unsafe uploads before anything is stored. If the image passes,
+        the Worker writes the raw bytes into a{' '}
         <a href="https://developers.cloudflare.com/r2/" target="_blank" rel="noreferrer">
           Cloudflare R2
         </a>{' '}
@@ -90,9 +92,11 @@ const steps: Step[] = [
           Google&apos;s Lyria 3
         </a>{' '}
         — an image-conditioned music generation model. It passes the product image URL alongside a
-        randomly-selected commercial-style prompt (pop jingle, lo-fi, orchestral, 80s synth, country,
-        soul, kids, or luxury — picked fresh each run). Lyria 3 generates a 30-second 48kHz stereo
-        MP3. A webhook is included so Replicate notifies the Worker the moment the track is ready.
+        commercial prompt that asks the model to infer what kind of music a likely buyer would want
+        to hear from the product itself. A toy should feel playful, a luxury item should feel
+        polished, and a bold snack should feel fun and punchy. Lyria 3 generates a 30-second 48kHz
+        stereo MP3. A webhook is included so Replicate notifies the Worker the moment the track is
+        ready.
       </>
     ),
   },
@@ -173,6 +177,11 @@ const stack: StackRow[] = [
     label: 'Rate limiting',
     detail: 'Cloudflare KV — 5 uploads per IP per hour before the Worker spends AI budget',
     href: 'https://developers.cloudflare.com/kv/',
+  },
+  {
+    label: 'Content moderation',
+    detail: 'Meta Llama Guard 4 via Replicate — screens uploaded images before storage',
+    href: 'https://replicate.com/meta/llama-guard-4-12b',
   },
   {
     label: 'Media storage',
