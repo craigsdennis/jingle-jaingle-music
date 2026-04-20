@@ -2,7 +2,7 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "jingle-jaingle",
   "main": "worker/index.ts",
-  "compatibility_date": "2026-04-03",
+  "compatibility_date": "2026-04-20",
   "vars": {
     "SITE_URL": "https://jingle-jaingle.craigsdemos.workers.dev",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAC0V9Q_x8cA9a-0A"
