@@ -46,8 +46,8 @@ export function VideoComposerModal({ jingle, onClose, onUploaded }: Props) {
   function handleDownload() {
     if (state.phase !== 'done') return
     const a = document.createElement('a')
-    a.href = state.url
-    a.download = `jingle-${jingle.id.slice(0, 8)}.webm`
+    a.href = uploadedUrl ?? state.url
+    a.download = `jingle-${jingle.id.slice(0, 8)}.${uploadedUrl ? 'mp4' : 'webm'}`
     a.click()
   }
 
@@ -152,7 +152,7 @@ export function VideoComposerModal({ jingle, onClose, onUploaded }: Props) {
                   icon={DownloadSimple}
                   onClick={handleDownload}
                 >
-                  Download
+                  {uploadedUrl ? 'Download MP4' : 'Download source'}
                 </Button>
 
                 {!uploadedUrl ? (
@@ -162,7 +162,7 @@ export function VideoComposerModal({ jingle, onClose, onUploaded }: Props) {
                     loading={isUploading}
                     onClick={() => void handleUpload()}
                   >
-                    Save to jingle jAIngle
+                    Save MP4 to jingle jAIngle
                   </Button>
                 ) : (
                   <Button
@@ -170,7 +170,7 @@ export function VideoComposerModal({ jingle, onClose, onUploaded }: Props) {
                     icon={FilmStrip}
                     onClick={() => window.open(uploadedUrl, '_blank')}
                   >
-                    View saved video
+                    Open saved MP4
                   </Button>
                 )}
 
@@ -185,13 +185,15 @@ export function VideoComposerModal({ jingle, onClose, onUploaded }: Props) {
 
               {uploadedUrl && (
                 <p className="vc-upload-success">
-                  Saved! Share this link:{' '}
+                  Saved as MP4. Share or download this link:{' '}
                   <a href={uploadedUrl} target="_blank" rel="noreferrer">{uploadedUrl}</a>
                 </p>
               )}
 
               <p className="vc-hint">
-                Square 1080×1080 WebM · {Math.round(state.blob.size / 1024)}KB · Ready for X, Instagram, or TikTok
+                {uploadedUrl
+                  ? 'Square 1080×1080 MP4 saved through Cloudflare Stream.'
+                  : `Square 1080×1080 WebM source · ${Math.round(state.blob.size / 1024)}KB · Upload to convert it to an Instagram-friendly MP4`}
               </p>
             </>
           )}

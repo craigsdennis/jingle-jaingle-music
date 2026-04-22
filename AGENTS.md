@@ -67,7 +67,7 @@ npm run deploy                    # tsc + vite build + wrangler deploy
 - **NSFW check runs before R2 write** — `checkImageNsfw()` converts the image to a base64 data URI and calls `meta/llama-guard-4-12b` synchronously (`Prefer: wait=30`) before writing anything to R2 or D1. Unsafe images return a 422. The check fails open (`unknown`) so model errors don't block legitimate users.
 - **`SITE_URL` is the canonical base for share links** — always use `serializeJingle(record, origin, votedIds, env.SITE_URL)`. Never hardcode the domain.
 - **Webhook token is validated before any DB access** in `handleReplicateWebhook`. Keep it that way.
-- **R2 object keys** follow the pattern `images/<uuid>.<ext>`, `audio/<uuid>.mp3`, and `video/<uuid>.webm`. Do not change the key scheme without updating `getMediaAsset`.
+- **R2 object keys** follow the pattern `images/<uuid>.<ext>`, `audio/<uuid>.mp3`, and `video/<uuid>.mp4`. Do not change the key scheme without updating `getMediaAsset`.
 
 ### Frontend
 

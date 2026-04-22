@@ -4,6 +4,7 @@ type VideoStatus = 'queued' | 'processing' | 'succeeded' | 'failed'
 type Env = {
   ASSETS: Fetcher
   DB: D1Database
+  MEDIA: MediaBinding
   RATE_LIMIT: KVNamespace
   MEDIA_BUCKET: R2Bucket
   REPLICATE_API_TOKEN: string
@@ -17,6 +18,7 @@ const PAGE_SIZE = 12
 // Rate limit: max generations per IP per window
 const RATE_LIMIT_MAX = 5
 const RATE_LIMIT_WINDOW_SECONDS = 3600 // 1 hour
+const MAX_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024
 
 type DbJingle = {
   id: string
@@ -82,7 +84,7 @@ const worker: ExportedHandler<Env> = {
       const url = new URL(request.url)
 
       if (request.method === 'GET' && url.pathname === '/api/config') {
-        return json({ turnstilesitekey: env.TURNSTILE_SITE_KEY ?? '' })
+        return json({ turnstilesitekey: turnstileSiteKeyForRequest(request, env) })
       }
 
       if (request.method === 'GET' && url.pathname === '/api/jingles') {
@@ -287,7 +289,7 @@ async function createJingle(request: Request, env: Env) {
   const formData = await request.formData()
 
   // Verify Turnstile token when a secret key is configured.
-  if (env.TURNSTILE_SECRET_KEY) {
+  if (shouldVerifyTurnstile(request, env)) {
     const token = formData.get('cf-turnstile-response')
     if (!token || typeof token !== 'string') {
       return json({ error: 'Missing Turnstile token. Please try again.' }, 400)
@@ -689,7 +691,7 @@ async function getSharePage(request: Request, env: Env, id: string) {
     : 'Drop a product photo. Get a 30-second jingle made with Google\'s Lyria 3 on Replicate, hosted on Cloudflare.'
   const imageUrl = record ? `${origin}/media/jingles/${id}/image` : `${base}/favicon.svg`
   const videoUrl = record?.video_key ? `${origin}/media/jingles/${id}/video` : null
-  const videoType = record?.video_content_type ?? 'video/webm'
+  const videoType = record?.video_content_type ?? 'video/mp4'
   const pageUrl = `${base}/share/${id}`
   const appUrl = record ? `${base}/?jingle=${id}` : base
 
@@ -760,35 +762,64 @@ async function handleVideoUpload(request: Request, env: Env, jingleId: string) {
 
   const body = await request.arrayBuffer()
 
-  // 200MB hard cap — share videos should be well under this
-  if (body.byteLength > 200 * 1024 * 1024) {
-    return json({ error: 'Video too large. Maximum 200MB.' }, 413)
+  // Stream Media Transformations supports up to 100MB source videos.
+  if (body.byteLength > MAX_VIDEO_UPLOAD_BYTES) {
+    return json({ error: 'Video too large. Maximum 100MB.' }, 413)
   }
 
-  const ext = contentType.includes('mp4') ? '.mp4' : '.webm'
-  const videoKey = `video/${jingleId}${ext}`
+  const input = new Response(body).body
+  if (!input) {
+    return json({ error: 'Could not read uploaded video.' }, 400)
+  }
 
-  await env.MEDIA_BUCKET.put(videoKey, body, {
-    httpMetadata: {
-      contentType,
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-  })
+  try {
+    const transformed = env.MEDIA.input(input).output({ mode: 'video' })
+    const transformedType = await transformed.contentType()
+    const videoKey = `video/${jingleId}.mp4`
 
-  await env.DB.prepare(
-    `UPDATE jingles
-     SET video_key = ?2,
-         video_content_type = ?3,
-         video_status = 'succeeded',
-         updated_at = ?4
-     WHERE id = ?1`,
-  ).bind(jingleId, videoKey, contentType, new Date().toISOString()).run()
+    await env.MEDIA_BUCKET.put(videoKey, await transformed.media(), {
+      httpMetadata: {
+        contentType: transformedType,
+        cacheControl: 'public, max-age=31536000, immutable',
+      },
+    })
 
-  const origin = new URL(request.url).origin
-  return json({
-    ok: true,
-    videoUrl: `${origin}/media/jingles/${jingleId}/video`,
-  }, 201)
+    if (record.video_key && record.video_key !== videoKey) {
+      await Promise.allSettled([env.MEDIA_BUCKET.delete(record.video_key)])
+    }
+
+    await env.DB.prepare(
+      `UPDATE jingles
+       SET video_key = ?2,
+           video_content_type = ?3,
+           video_status = 'succeeded',
+           video_error = NULL,
+           updated_at = ?4
+       WHERE id = ?1`,
+    ).bind(jingleId, videoKey, transformedType, new Date().toISOString()).run()
+
+    const origin = new URL(request.url).origin
+    return json({
+      ok: true,
+      videoUrl: `${origin}/media/jingles/${jingleId}/video`,
+    }, 201)
+  } catch (error) {
+    const message = error instanceof Error
+      ? `Could not convert the uploaded video to MP4 via Cloudflare Stream: ${error.message}`
+      : 'Could not convert the uploaded video to MP4 via Cloudflare Stream.'
+
+    if (!record.video_key) {
+      await env.DB.prepare(
+        `UPDATE jingles
+         SET video_status = 'failed',
+             video_error = ?2,
+             updated_at = ?3
+         WHERE id = ?1`,
+      ).bind(jingleId, message, new Date().toISOString()).run()
+    }
+
+    return json({ error: message }, 502)
+  }
 }
 
 async function checkImageNsfw(dataUri: string, replicateToken: string): Promise<'safe' | 'unsafe' | 'unknown'> {
@@ -926,6 +957,19 @@ function ensureReplicateConfig(env: Env) {
   if (!env.REPLICATE_API_TOKEN || !env.REPLICATE_WEBHOOK_TOKEN) {
     throw new Error('REPLICATE_API_TOKEN and REPLICATE_WEBHOOK_TOKEN must both be configured.')
   }
+}
+
+function turnstileSiteKeyForRequest(request: Request, env: Env) {
+  return shouldVerifyTurnstile(request, env) ? (env.TURNSTILE_SITE_KEY ?? '') : ''
+}
+
+function shouldVerifyTurnstile(request: Request, env: Env) {
+  if (!env.TURNSTILE_SECRET_KEY) {
+    return false
+  }
+
+  const hostname = new URL(request.url).hostname
+  return hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '::1'
 }
 
 function extensionFor(contentType: string) {
