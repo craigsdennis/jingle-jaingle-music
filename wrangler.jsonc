@@ -4,6 +4,7 @@
   "main": "worker/index.ts",
   "compatibility_date": "2026-04-20",
   "vars": {
+    "CLOUDFLARE_ACCOUNT_ID": "51e28e9a83197a9f12a2e39f9477ba4e",
     "SITE_URL": "https://jingle-jaingle.craigsdemos.workers.dev",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAC0V9Q_x8cA9a-0A"
   },
@@ -13,10 +14,6 @@
   },
   "observability": {
     "enabled": true
-  },
-  "media": {
-    "binding": "MEDIA",
-    "remote": true
   },
   "kv_namespaces": [
     {

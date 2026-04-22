@@ -3,8 +3,9 @@ type VideoStatus = 'queued' | 'processing' | 'succeeded' | 'failed'
 
 type Env = {
   ASSETS: Fetcher
+  CLOUDFLARE_ACCOUNT_ID: string
+  CLOUDFLARE_STREAM_API_TOKEN: string
   DB: D1Database
-  MEDIA: MediaBinding
   RATE_LIMIT: KVNamespace
   MEDIA_BUCKET: R2Bucket
   REPLICATE_API_TOKEN: string
@@ -18,7 +19,7 @@ const PAGE_SIZE = 12
 // Rate limit: max generations per IP per window
 const RATE_LIMIT_MAX = 5
 const RATE_LIMIT_WINDOW_SECONDS = 3600 // 1 hour
-const MAX_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024
+const MAX_VIDEO_UPLOAD_BYTES = 200 * 1024 * 1024
 
 type DbJingle = {
   id: string
@@ -216,14 +217,17 @@ async function listJingles(request: Request, env: Env) {
     nextCursor = btoa(`${last.votes}|${last.created_at}|${last.id}`)
   }
 
+  const hydratedPage = await Promise.all(page.map((jingle) => syncStreamVideoIfNeeded(env, jingle)))
+
   return json({
-    jingles: page.map((jingle) => serializeJingle(jingle, origin, votedIds, env.SITE_URL)),
+    jingles: hydratedPage.map((jingle) => serializeJingle(jingle, origin, votedIds, env.SITE_URL)),
     nextCursor,
   })
 }
 
 async function getJingle(request: Request, env: Env, id: string) {
-  const record = await findJingle(env, id)
+  const found = await findJingle(env, id)
+  const record = found ? await syncStreamVideoIfNeeded(env, found) : null
 
   if (!record) {
     return json({ error: 'Jingle not found.' }, 404)
@@ -275,8 +279,9 @@ async function deleteAdminJingle(env: Env, id: string) {
     return json({ error: 'Jingle not found.' }, 404)
   }
 
-  const keysToDelete = [record.image_key, record.audio_key, record.video_key].filter(Boolean) as string[]
-  await Promise.allSettled(keysToDelete.map((key) => env.MEDIA_BUCKET.delete(key)))
+  await deleteStoredVideo(env, record)
+  const assetKeys = [record.image_key, record.audio_key].filter(Boolean) as string[]
+  await Promise.allSettled(assetKeys.map((key) => env.MEDIA_BUCKET.delete(key)))
 
   await env.DB.prepare('DELETE FROM jingles WHERE id = ?1').bind(id).run()
 
@@ -599,10 +604,15 @@ async function storeCompletedPrediction(env: Env, jingleId: string, prediction: 
 }
 
 async function getMediaAsset(env: Env, jingleId: string, kind: string) {
-  const record = await findJingle(env, jingleId)
+  const found = await findJingle(env, jingleId)
+  const record = found ? await syncStreamVideoIfNeeded(env, found) : null
 
   if (!record) {
     return new Response('Not found', { status: 404 })
+  }
+
+  if (kind === 'video' && record.video_key && isExternalUrl(record.video_key)) {
+    return Response.redirect(record.video_key, 302)
   }
 
   const key = kind === 'image' ? record.image_key
@@ -669,9 +679,9 @@ async function deleteJingle(request: Request, env: Env, id: string) {
     return json({ error: 'Invalid or missing delete token.' }, 403)
   }
 
-  // Delete R2 objects — best effort, don't fail if already gone
-  const keysToDelete = [record.image_key, record.audio_key, record.video_key].filter(Boolean) as string[]
-  await Promise.allSettled(keysToDelete.map((key) => env.MEDIA_BUCKET.delete(key)))
+  await deleteStoredVideo(env, record)
+  const assetKeys = [record.image_key, record.audio_key].filter(Boolean) as string[]
+  await Promise.allSettled(assetKeys.map((key) => env.MEDIA_BUCKET.delete(key)))
 
   await env.DB.prepare('DELETE FROM jingles WHERE id = ?1').bind(id).run()
 
@@ -679,7 +689,8 @@ async function deleteJingle(request: Request, env: Env, id: string) {
 }
 
 async function getSharePage(request: Request, env: Env, id: string) {
-  const record = await findJingle(env, id)
+  const found = await findJingle(env, id)
+  const record = found ? await syncStreamVideoIfNeeded(env, found) : null
   const origin = new URL(request.url).origin
   const base = env.SITE_URL ? env.SITE_URL.replace(/\/$/, '') : origin
 
@@ -690,7 +701,7 @@ async function getSharePage(request: Request, env: Env, id: string) {
     ? `A product jingle made with Google's Lyria 3 on Replicate, hosted on Cloudflare. ${record.votes} vote${record.votes === 1 ? '' : 's'} so far.`
     : 'Drop a product photo. Get a 30-second jingle made with Google\'s Lyria 3 on Replicate, hosted on Cloudflare.'
   const imageUrl = record ? `${origin}/media/jingles/${id}/image` : `${base}/favicon.svg`
-  const videoUrl = record?.video_key ? `${origin}/media/jingles/${id}/video` : null
+  const videoUrl = record ? serializedVideoUrl(record, origin) : null
   const videoType = record?.video_content_type ?? 'video/mp4'
   const pageUrl = `${base}/share/${id}`
   const appUrl = record ? `${base}/?jingle=${id}` : base
@@ -749,6 +760,8 @@ async function getSharePage(request: Request, env: Env, id: string) {
 
 
 async function handleVideoUpload(request: Request, env: Env, jingleId: string) {
+  ensureStreamConfig(env)
+
   const record = await findJingle(env, jingleId)
   if (!record) return json({ error: 'Jingle not found.' }, 404)
   if (record.status !== 'succeeded') return json({ error: 'Only succeeded jingles can have a share video.' }, 409)
@@ -756,66 +769,58 @@ async function handleVideoUpload(request: Request, env: Env, jingleId: string) {
   const contentType = request.headers.get('content-type') || 'video/webm'
   const contentLength = Number.parseInt(request.headers.get('content-length') ?? '', 10)
 
-  // Sanity-check content type — only accept video
   if (!contentType.startsWith('video/')) {
     return json({ error: 'Only video uploads are accepted.' }, 400)
   }
 
-  if (Number.isFinite(contentLength) && contentLength > MAX_VIDEO_UPLOAD_BYTES) {
-    return json({ error: 'Video too large. Maximum 100MB.' }, 413)
+  if (!Number.isFinite(contentLength) || contentLength <= 0) {
+    return json({ error: 'Missing video size for upload.' }, 400)
   }
 
-  if (!request.body) {
+  if (contentLength > MAX_VIDEO_UPLOAD_BYTES) {
+    return json({ error: 'Video too large. Maximum 200MB.' }, 413)
+  }
+
+  const body = await request.arrayBuffer()
+
+  if (body.byteLength === 0) {
     return json({ error: 'Could not read uploaded video.' }, 400)
   }
 
   try {
-    // Pass the original request stream through so Media Transformations sees
-    // a body with a known length instead of an in-memory generic stream.
-    const transformed = env.MEDIA.input(request.body).output({ mode: 'video' })
-    const transformedType = await transformed.contentType()
-    const videoKey = `video/${jingleId}.mp4`
+    const streamBody = new FormData()
+    streamBody.append('file', new File([body], `jingle-${jingleId.slice(0, 8)}.webm`, { type: contentType }))
 
-    await env.MEDIA_BUCKET.put(videoKey, await transformed.media(), {
-      httpMetadata: {
-        contentType: transformedType,
-        cacheControl: 'public, max-age=31536000, immutable',
-      },
+    const upload = await streamApi<{ uid?: string }>(env, '', {
+      method: 'POST',
+      body: streamBody,
     })
 
-    if (record.video_key && record.video_key !== videoKey) {
-      await Promise.allSettled([env.MEDIA_BUCKET.delete(record.video_key)])
+    const videoId = upload.result?.uid
+    if (!videoId) {
+      throw new Error('Cloudflare Stream did not return a video id.')
     }
+
+    await deleteStoredVideo(env, record)
 
     await env.DB.prepare(
       `UPDATE jingles
-       SET video_key = ?2,
-           video_content_type = ?3,
-           video_status = 'succeeded',
-           video_error = NULL,
-           updated_at = ?4
-       WHERE id = ?1`,
-    ).bind(jingleId, videoKey, transformedType, new Date().toISOString()).run()
+        SET video_key = ?2,
+            video_content_type = ?3,
+            video_status = 'processing',
+            video_error = NULL,
+            video_replicate_id = ?4,
+            updated_at = ?5
+        WHERE id = ?1`,
+    )
+      .bind(jingleId, null, null, videoId, new Date().toISOString())
+      .run()
 
-    const origin = new URL(request.url).origin
-    return json({
-      ok: true,
-      videoUrl: `${origin}/media/jingles/${jingleId}/video`,
-    }, 201)
+    return json({ videoStatus: 'processing', videoUrl: null }, 201)
   } catch (error) {
     const message = error instanceof Error
-      ? `Could not convert the uploaded video to MP4 via Cloudflare Stream: ${error.message}`
-      : 'Could not convert the uploaded video to MP4 via Cloudflare Stream.'
-
-    if (!record.video_key) {
-      await env.DB.prepare(
-        `UPDATE jingles
-         SET video_status = 'failed',
-             video_error = ?2,
-             updated_at = ?3
-         WHERE id = ?1`,
-      ).bind(jingleId, message, new Date().toISOString()).run()
-    }
+      ? `Could not upload the video to Cloudflare Stream: ${error.message}`
+      : 'Could not upload the video to Cloudflare Stream.'
 
     return json({ error: message }, 502)
   }
@@ -913,11 +918,12 @@ function serializeJingle(record: DbJingle, origin: string, votedIds: Set<string>
     votes: record.votes,
     imageUrl: `${origin}/media/jingles/${record.id}/image`,
     audioUrl: record.audio_key ? `${origin}/media/jingles/${record.id}/audio` : null,
-    videoUrl: record.video_key ? `${origin}/media/jingles/${record.id}/video` : null,
+    videoUrl: serializedVideoUrl(record, origin),
     videoStatus: record.video_status ?? null,
     shareUrl: `${base}/share/${record.id}`,
     hasVoted: votedIds.has(record.id),
     errorMessage: record.error_message,
+    videoError: record.video_error,
     replicateUrl: record.replicate_web_url,
     createdAt: record.created_at,
     updatedAt: record.updated_at,
@@ -958,8 +964,205 @@ function ensureReplicateConfig(env: Env) {
   }
 }
 
+function ensureStreamConfig(env: Env) {
+  if (!env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_STREAM_API_TOKEN) {
+    throw new Error('CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_STREAM_API_TOKEN must both be configured.')
+  }
+}
+
+function hasStreamConfig(env: Env) {
+  return Boolean(env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_STREAM_API_TOKEN)
+}
+
+async function syncStreamVideoIfNeeded(env: Env, record: DbJingle) {
+  if (!record.video_replicate_id) {
+    return record
+  }
+
+  if (!hasStreamConfig(env)) {
+    return record
+  }
+
+  if (record.video_status === 'failed') {
+    return record
+  }
+
+  if (record.video_status === 'succeeded' && record.video_key) {
+    return record
+  }
+
+  try {
+    const video = await streamApi<{
+      readyToStream?: boolean
+      status?: {
+        state?: string
+        errorReasonText?: string
+      }
+    }>(env, `/${record.video_replicate_id}`)
+    const details = video.result
+
+    if (details?.status?.state === 'error') {
+      return updateVideoRecord(env, record, {
+        video_error: details.status.errorReasonText || 'Cloudflare Stream could not process this upload.',
+        video_key: null,
+        video_content_type: null,
+        video_status: 'failed',
+      })
+    }
+
+    if (!details?.readyToStream) {
+      if (record.video_status === 'processing') {
+        return record
+      }
+
+      return updateVideoRecord(env, record, {
+        video_error: null,
+        video_key: null,
+        video_content_type: null,
+        video_status: 'processing',
+      })
+    }
+
+    let downloads = await streamApi<{
+      default?: {
+        status?: 'ready' | 'inprogress' | 'error'
+        url?: string
+      }
+    }>(env, `/${record.video_replicate_id}/downloads`)
+
+    if (!downloads.result?.default) {
+      downloads = await streamApi<{
+        default?: {
+          status?: 'ready' | 'inprogress' | 'error'
+          url?: string
+        }
+      }>(env, `/${record.video_replicate_id}/downloads`, { method: 'POST' })
+    }
+
+    const mp4 = downloads.result?.default
+
+    if (!mp4) {
+      return updateVideoRecord(env, record, {
+        video_error: null,
+        video_key: null,
+        video_content_type: null,
+        video_status: 'processing',
+      })
+    }
+
+    if (mp4.status === 'error') {
+      return updateVideoRecord(env, record, {
+        video_error: 'Cloudflare Stream could not generate the MP4 download.',
+        video_key: null,
+        video_content_type: null,
+        video_status: 'failed',
+      })
+    }
+
+    if (mp4.status !== 'ready' || !mp4.url) {
+      return updateVideoRecord(env, record, {
+        video_error: null,
+        video_key: null,
+        video_content_type: null,
+        video_status: 'processing',
+      })
+    }
+
+    return updateVideoRecord(env, record, {
+      video_error: null,
+      video_key: mp4.url,
+      video_content_type: 'video/mp4',
+      video_status: 'succeeded',
+    })
+  } catch {
+    return record
+  }
+}
+
+async function updateVideoRecord(env: Env, record: DbJingle, next: {
+  video_error: string | null
+  video_key: string | null
+  video_content_type: string | null
+  video_status: VideoStatus
+}) {
+  const now = new Date().toISOString()
+
+  await env.DB.prepare(
+    `UPDATE jingles
+      SET video_key = ?2,
+          video_content_type = ?3,
+          video_status = ?4,
+          video_error = ?5,
+          updated_at = ?6
+      WHERE id = ?1`,
+  )
+    .bind(record.id, next.video_key, next.video_content_type, next.video_status, next.video_error, now)
+    .run()
+
+  return {
+    ...record,
+    ...next,
+    updated_at: now,
+  }
+}
+
+async function deleteStoredVideo(env: Env, record: DbJingle) {
+  const tasks: Array<Promise<unknown>> = []
+
+  if (record.video_key && !isExternalUrl(record.video_key)) {
+    tasks.push(env.MEDIA_BUCKET.delete(record.video_key))
+  }
+
+  if (record.video_replicate_id) {
+    if (hasStreamConfig(env)) {
+      tasks.push(streamApi(env, `/${record.video_replicate_id}`, { method: 'DELETE' }))
+    }
+  }
+
+  if (tasks.length > 0) {
+    await Promise.allSettled(tasks)
+  }
+}
+
+function serializedVideoUrl(record: DbJingle, origin: string) {
+  if (record.video_status !== 'succeeded' || !record.video_key) {
+    return null
+  }
+
+  return isExternalUrl(record.video_key)
+    ? record.video_key
+    : `${origin}/media/jingles/${record.id}/video`
+}
+
+function isExternalUrl(value: string | null) {
+  return Boolean(value && /^https?:\/\//.test(value))
+}
+
 function turnstileSiteKeyForRequest(request: Request, env: Env) {
   return shouldVerifyTurnstile(request, env) ? (env.TURNSTILE_SITE_KEY ?? '') : ''
+}
+
+async function streamApi<T>(env: Env, path: string, init?: RequestInit) {
+  const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/stream${path}`, {
+    ...init,
+    headers: {
+      authorization: `Bearer ${env.CLOUDFLARE_STREAM_API_TOKEN}`,
+      ...(init?.headers ?? {}),
+    },
+  })
+
+  const payload = await response.json() as {
+    success?: boolean
+    result?: T
+    errors?: Array<{ message?: string }>
+  }
+
+  if (!response.ok || payload.success === false) {
+    const message = payload.errors?.[0]?.message || `Cloudflare Stream API request failed (${response.status}).`
+    throw new Error(message)
+  }
+
+  return payload
 }
 
 function shouldVerifyTurnstile(request: Request, env: Env) {

@@ -712,11 +712,11 @@ function HomePage() {
         <VideoComposerModal
           jingle={composingJingle}
           onClose={() => setComposingJingle(null)}
-          onUploaded={(videoUrl) => {
+          onUploaded={(videoUrl, videoStatus) => {
             setJingles((cur) =>
               cur.map((j) =>
                 j.id === composingJingle.id
-                  ? { ...j, videoUrl, videoStatus: 'succeeded' }
+                  ? { ...j, videoUrl, videoStatus }
                   : j
               )
             )

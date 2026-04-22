@@ -135,6 +135,21 @@ const steps: Step[] = [
   },
   {
     icon: <ShareNetwork size={28} weight="duotone" />,
+    title: 'Optional share videos are rendered through Stream',
+    body: (
+      <>
+        After a jingle is done, the browser can turn the product image, audio, and QR code into a
+        square share video. That file is uploaded through the Worker to{' '}
+        <a href="https://developers.cloudflare.com/stream/" target="_blank" rel="noreferrer">
+          Cloudflare Stream
+        </a>{' '}
+        and Stream generates the downloadable MP4 used for social posting. The Worker polls the
+        Stream API until that MP4 is ready, then caches the download URL on the jingle record.
+      </>
+    ),
+  },
+  {
+    icon: <ShareNetwork size={28} weight="duotone" />,
     title: 'Anyone can share a direct link',
     body: (
       <>
@@ -143,9 +158,10 @@ const steps: Step[] = [
         <a href="https://ogp.me/" target="_blank" rel="noreferrer">
           Open Graph
         </a>{' '}
-        and Twitter Card meta tags — title, description, and the product image — so social platforms
-        render a proper card. Humans are immediately redirected into the app. The Web Share API is
-        used on mobile; clipboard copy is the fallback on desktop.
+        and Twitter Card meta tags. By default that means title, description, and the product image;
+        once a Stream-backed MP4 exists, the share page upgrades to include the video too. Humans
+        are immediately redirected into the app. The Web Share API is used on mobile; clipboard copy
+        is the fallback on desktop.
       </>
     ),
   },
@@ -199,6 +215,11 @@ const stack: StackRow[] = [
     href: 'https://replicate.com/google/lyria-3',
   },
   {
+    label: 'Video pipeline',
+    detail: 'Cloudflare Stream — saved share videos and MP4 download generation',
+    href: 'https://developers.cloudflare.com/stream/',
+  },
+  {
     label: 'Delivery',
     detail: 'Cloudflare Workers Assets — frontend served at the edge',
     href: 'https://developers.cloudflare.com/workers/static-assets/',
@@ -227,8 +248,8 @@ export function AboutPage({ onBack }: Props) {
         </h1>
         <p className="about-lead">
           Drop a product photo. Get a commercial jingle. Here&apos;s what happens between those two
-          moments — plus what keeps uploads rate-limited and the admin tools behind Cloudflare
-          Access.
+          moments — plus how saved share videos go through Cloudflare Stream, what keeps uploads
+          rate-limited, and the admin tools behind Cloudflare Access.
         </p>
       </div>
 

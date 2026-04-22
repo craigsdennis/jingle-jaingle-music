@@ -167,6 +167,8 @@ All routes are handled by the single Worker in `worker/index.ts`.
 
 | Variable | Where set | Description |
 |---|---|---|
+| `CLOUDFLARE_ACCOUNT_ID` | `wrangler.jsonc` vars | Cloudflare account id used for Stream API calls |
+| `CLOUDFLARE_STREAM_API_TOKEN` | Wrangler secret | API token used to upload and manage saved videos in Stream |
 | `SITE_URL` | `wrangler.jsonc` vars | Production base URL for share links |
 | `TURNSTILE_SITE_KEY` | `wrangler.jsonc` vars | Public Turnstile key (safe to commit) |
 | `REPLICATE_API_TOKEN` | Wrangler secret | Replicate API key |

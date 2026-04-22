@@ -13,7 +13,23 @@ type Jingle = {
 type Props = {
   jingle: Jingle
   onClose: () => void
-  onUploaded: (videoUrl: string) => void
+  onUploaded: (videoUrl: string | null, videoStatus: string | null) => void
+}
+
+type VideoUploadResponse = {
+  error?: string
+  videoUrl?: string | null
+  videoStatus?: string | null
+}
+
+type VideoPollResponse = {
+  error?: string
+  jingle?: {
+    videoUrl: string | null
+    videoStatus: string | null
+    errorMessage: string | null
+    videoError?: string | null
+  }
 }
 
 async function readApiPayload(response: Response) {
@@ -31,7 +47,9 @@ export function VideoComposerModal({ jingle, onClose, onUploaded }: Props) {
   const { state, compose, reset } = useVideoComposer()
   const videoRef = useRef<HTMLVideoElement>(null)
   const [isUploading, setIsUploading] = useState(false)
+  const [isProcessingRemote, setIsProcessingRemote] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null)
   const [uploadedUrl, setUploadedUrl] = useState<string | null>(null)
   const hasStarted = useRef(false)
 
@@ -66,29 +84,59 @@ export function VideoComposerModal({ jingle, onClose, onUploaded }: Props) {
     if (state.phase !== 'done') return
     setIsUploading(true)
     setUploadError(null)
+    setUploadNotice(null)
 
     try {
-      const res = await fetch(`/api/jingles/${jingle.id}/video`, {
+      const uploadRes = await fetch(`/api/jingles/${jingle.id}/video`, {
         method: 'POST',
         headers: { 'content-type': state.blob.type },
         body: state.blob,
       })
-      const payload = await readApiPayload(res)
+      const uploadPayload = await readApiPayload(uploadRes) as VideoUploadResponse
 
-      if (!res.ok) {
-        throw new Error(payload.error ?? 'Upload failed.')
+      if (!uploadRes.ok) {
+        throw new Error(uploadPayload.error ?? 'Could not upload the video to Cloudflare Stream.')
       }
 
-      const { videoUrl } = payload
-      if (!videoUrl) {
-        throw new Error('Upload completed without a saved video URL.')
+      onUploaded(uploadPayload.videoUrl ?? null, uploadPayload.videoStatus ?? 'processing')
+      setIsProcessingRemote(true)
+      setUploadNotice('Uploaded to jingle jAIngle. Cloudflare Stream is generating the MP4 now…')
+
+      const deadline = Date.now() + 180_000
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 4000))
+
+        const pollRes = await fetch(`/api/jingles/${jingle.id}`)
+        const pollPayload = await readApiPayload(pollRes) as VideoPollResponse
+        if (!pollRes.ok) {
+          throw new Error(pollPayload.error ?? 'Could not refresh the saved video.')
+        }
+
+        const next = pollPayload.jingle
+        if (!next) {
+          throw new Error('Could not refresh the saved video.')
+        }
+
+        onUploaded(next.videoUrl, next.videoStatus)
+
+        if (next.videoStatus === 'failed') {
+          throw new Error(next.videoError ?? next.errorMessage ?? 'Cloudflare Stream could not finish the MP4.')
+        }
+
+        if (next.videoStatus === 'succeeded' && next.videoUrl) {
+          setUploadedUrl(next.videoUrl)
+          setUploadNotice('Saved as MP4. Share or download this link:')
+          setIsProcessingRemote(false)
+          return
+        }
       }
-      setUploadedUrl(videoUrl)
-      onUploaded(videoUrl)
+
+      setUploadNotice('Uploaded to jingle jAIngle. The MP4 is still processing. Refresh in a minute.')
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Upload failed.')
     } finally {
       setIsUploading(false)
+      setIsProcessingRemote(false)
     }
   }
 
@@ -96,6 +144,7 @@ export function VideoComposerModal({ jingle, onClose, onUploaded }: Props) {
     reset()
     hasStarted.current = false
     setUploadError(null)
+    setUploadNotice(null)
     setUploadedUrl(null)
     if (jingle.audioUrl) {
       void compose(jingle.imageUrl, jingle.audioUrl)
@@ -173,10 +222,11 @@ export function VideoComposerModal({ jingle, onClose, onUploaded }: Props) {
                   <Button
                     variant="secondary"
                     icon={CloudArrowUp}
-                    loading={isUploading}
+                    loading={isUploading || isProcessingRemote}
+                    disabled={isProcessingRemote}
                     onClick={() => void handleUpload()}
                   >
-                    Save MP4 to jingle jAIngle
+                    {isProcessingRemote ? 'Processing in Stream…' : 'Save MP4 to jingle jAIngle'}
                   </Button>
                 ) : (
                   <Button
@@ -197,17 +247,19 @@ export function VideoComposerModal({ jingle, onClose, onUploaded }: Props) {
                 <p className="vc-upload-error">{uploadError}</p>
               )}
 
-              {uploadedUrl && (
+              {uploadNotice && (
                 <p className="vc-upload-success">
-                  Saved as MP4. Share or download this link:{' '}
-                  <a href={uploadedUrl} target="_blank" rel="noreferrer">{uploadedUrl}</a>
+                  {uploadNotice}{uploadedUrl ? ' ' : ''}
+                  {uploadedUrl && (
+                    <a href={uploadedUrl} target="_blank" rel="noreferrer">{uploadedUrl}</a>
+                  )}
                 </p>
               )}
 
               <p className="vc-hint">
                 {uploadedUrl
                   ? 'Square 1080×1080 MP4 saved through Cloudflare Stream.'
-                  : `Square 1080×1080 WebM source · ${Math.round(state.blob.size / 1024)}KB · Upload to convert it to an Instagram-friendly MP4`}
+                  : `Square 1080×1080 WebM source · ${Math.round(state.blob.size / 1024)}KB · Upload it to Cloudflare Stream to generate an Instagram-friendly MP4`}
               </p>
             </>
           )}
