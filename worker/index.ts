@@ -767,12 +767,8 @@ async function handleVideoUpload(request: Request, env: Env, jingleId: string) {
     return json({ error: 'Video too large. Maximum 100MB.' }, 413)
   }
 
-  const input = new Response(body).body
-  if (!input) {
-    return json({ error: 'Could not read uploaded video.' }, 400)
-  }
-
   try {
+    const input = await fixedLengthReadable(body)
     const transformed = env.MEDIA.input(input).output({ mode: 'video' })
     const transformedType = await transformed.contentType()
     const videoKey = `video/${jingleId}.mp4`
@@ -957,6 +953,17 @@ function ensureReplicateConfig(env: Env) {
   if (!env.REPLICATE_API_TOKEN || !env.REPLICATE_WEBHOOK_TOKEN) {
     throw new Error('REPLICATE_API_TOKEN and REPLICATE_WEBHOOK_TOKEN must both be configured.')
   }
+}
+
+async function fixedLengthReadable(buffer: ArrayBuffer) {
+  const stream = new FixedLengthStream(buffer.byteLength)
+  const writer = stream.writable.getWriter()
+  const chunk = new Uint8Array(buffer)
+
+  await writer.write(chunk)
+  await writer.close()
+
+  return stream.readable
 }
 
 function turnstileSiteKeyForRequest(request: Request, env: Env) {
