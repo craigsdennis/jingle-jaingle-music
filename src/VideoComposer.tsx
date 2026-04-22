@@ -16,6 +16,17 @@ type Props = {
   onUploaded: (videoUrl: string) => void
 }
 
+async function readApiPayload(response: Response) {
+  const contentType = response.headers.get('content-type') ?? ''
+
+  if (contentType.includes('application/json')) {
+    return response.json() as Promise<{ error?: string; videoUrl?: string }>
+  }
+
+  const text = await response.text()
+  throw new Error(text.slice(0, 200) || `Upload failed with status ${response.status}.`)
+}
+
 export function VideoComposerModal({ jingle, onClose, onUploaded }: Props) {
   const { state, compose, reset } = useVideoComposer()
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -62,13 +73,16 @@ export function VideoComposerModal({ jingle, onClose, onUploaded }: Props) {
         headers: { 'content-type': state.blob.type },
         body: state.blob,
       })
+      const payload = await readApiPayload(res)
 
       if (!res.ok) {
-        const payload = await res.json() as { error?: string }
         throw new Error(payload.error ?? 'Upload failed.')
       }
 
-      const { videoUrl } = await res.json() as { videoUrl: string }
+      const { videoUrl } = payload
+      if (!videoUrl) {
+        throw new Error('Upload completed without a saved video URL.')
+      }
       setUploadedUrl(videoUrl)
       onUploaded(videoUrl)
     } catch (err) {

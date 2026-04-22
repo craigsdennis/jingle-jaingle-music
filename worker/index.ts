@@ -754,22 +754,25 @@ async function handleVideoUpload(request: Request, env: Env, jingleId: string) {
   if (record.status !== 'succeeded') return json({ error: 'Only succeeded jingles can have a share video.' }, 409)
 
   const contentType = request.headers.get('content-type') || 'video/webm'
+  const contentLength = Number.parseInt(request.headers.get('content-length') ?? '', 10)
 
   // Sanity-check content type — only accept video
   if (!contentType.startsWith('video/')) {
     return json({ error: 'Only video uploads are accepted.' }, 400)
   }
 
-  const body = await request.arrayBuffer()
-
-  // Stream Media Transformations supports up to 100MB source videos.
-  if (body.byteLength > MAX_VIDEO_UPLOAD_BYTES) {
+  if (Number.isFinite(contentLength) && contentLength > MAX_VIDEO_UPLOAD_BYTES) {
     return json({ error: 'Video too large. Maximum 100MB.' }, 413)
   }
 
+  if (!request.body) {
+    return json({ error: 'Could not read uploaded video.' }, 400)
+  }
+
   try {
-    const input = await fixedLengthReadable(body)
-    const transformed = env.MEDIA.input(input).output({ mode: 'video' })
+    // Pass the original request stream through so Media Transformations sees
+    // a body with a known length instead of an in-memory generic stream.
+    const transformed = env.MEDIA.input(request.body).output({ mode: 'video' })
     const transformedType = await transformed.contentType()
     const videoKey = `video/${jingleId}.mp4`
 
@@ -953,17 +956,6 @@ function ensureReplicateConfig(env: Env) {
   if (!env.REPLICATE_API_TOKEN || !env.REPLICATE_WEBHOOK_TOKEN) {
     throw new Error('REPLICATE_API_TOKEN and REPLICATE_WEBHOOK_TOKEN must both be configured.')
   }
-}
-
-async function fixedLengthReadable(buffer: ArrayBuffer) {
-  const stream = new FixedLengthStream(buffer.byteLength)
-  const writer = stream.writable.getWriter()
-  const chunk = new Uint8Array(buffer)
-
-  await writer.write(chunk)
-  await writer.close()
-
-  return stream.readable
 }
 
 function turnstileSiteKeyForRequest(request: Request, env: Env) {
