@@ -2,6 +2,8 @@
 
 Drop a product photo. Get a 30-second commercial jingle made with Google's Lyria 3 on Replicate, hosted entirely on Cloudflare.
 
+[<img src="https://img.youtube.com/vi/biehLOXyHro/0.jpg">](https://youtu.be/biehLOXyHro "I Built an AI That Writes Jingles for Cursed Products")
+
 ---
 
 ## What it does
